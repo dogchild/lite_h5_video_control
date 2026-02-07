@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.9
+// @version      3.15
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -361,7 +361,8 @@
     // --- Helper: Simulate Full Click Sequence (Critical for React/Vue) ---
     function simulateClick(element) {
         if (!element) return;
-        const opts = { bubbles: true, cancelable: true, view: window };
+        const outputWindow = element.ownerDocument.defaultView || window;
+        const opts = { bubbles: true, cancelable: true, view: outputWindow };
         element.dispatchEvent(new MouseEvent('mousedown', opts));
         element.dispatchEvent(new MouseEvent('mouseup', opts));
         element.click();
@@ -374,7 +375,7 @@
         // 1. Setup candidate list
         const candidates = [];
 
-        // 2. Scan all elements (expensive but necessary for Douyu)
+        // 2. Scan all elements (generic fuzzy search)
         const elements = root.querySelectorAll('*');
         for (let i = 0; i < elements.length; i++) {
             const el = elements[i];
@@ -386,8 +387,7 @@
                 (el.getAttribute('id') || '') +
                 (el.getAttribute('title') || '') +
                 (el.getAttribute('aria-label') || '') +
-                (el.getAttribute('data-title') || '') +
-                (el.getAttribute('data-tip') || ''); // Douyu tooltip
+                (el.getAttribute('data-title') || '');
 
             const lowerAttr = attrStr.toLowerCase();
 
@@ -420,10 +420,10 @@
 
     function toggleFullscreen(video, mode) {
         // Helper to find wrapper
-        // Helper to find wrapper
-        // Helper to find wrapper
-        const getWrapper = (v) => v.closest('.html5-video-player') || v.closest('.player-container') || v.closest('.video-wrapper') || v.closest('.art-video-player') || v.closest('.bilibili-player') || v.parentElement;
+        const getWrapper = (v) => v.closest('.html5-video-player') || v.closest('.player-container') || v.closest('.video-wrapper') || v.closest('.art-video-player') || v.closest('.bilibili-player') || v.closest('xg-video-container') || v.parentElement;
         const wrapper = getWrapper(video) || video;
+
+        console.log('LiteVideoControl: toggleFullscreen', mode, video, wrapper);
 
         if (mode === 'web') {
             // Logic:
@@ -445,6 +445,9 @@
                     '[data-a-target="player-theatre-mode-button"]',
                     // Huya
                     '.player-fullpage-btn',
+                    // Douyin
+                    'xg-icon.xgplayer-page-full-screen',
+                    '[data-e2e="xgplayer-page-full-screen"]',
 
                     // Generic ARIA
                     '[aria-label="网页全屏"]', '[aria-label="Web Fullscreen"]',
@@ -487,6 +490,7 @@
                     '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', // Bilibili
                     '[data-a-target="player-fullscreen-button"]', // Twitch
                     '.player-fullscreen-btn', // Huya
+                    '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]', // Douyin
                     '.vjs-fullscreen-control' // VideoJS
                 ];
 
@@ -513,7 +517,8 @@
                 if (!btnClicked) {
                     // Start of the fallback chain
                     // Dispatch a double click event on the video content
-                    const opts = { bubbles: true, cancelable: true, view: window };
+                    const outputWindow = video.ownerDocument.defaultView || window;
+                    const opts = { bubbles: true, cancelable: true, view: outputWindow };
                     video.dispatchEvent(new MouseEvent('dblclick', opts));
 
                     // We can't easily know if this succeeded without checking document.fullscreenElement async.
@@ -804,8 +809,11 @@
         // Map key to action
         const action = Object.entries(config.keys).find(([k, v]) => v.toLowerCase() === keyStr.toLowerCase());
 
+        console.log('LiteVideoControl: Key:', keyStr, 'Action:', action ? action[0] : 'None');
+
         if (action) {
             const video = getActiveVideo();
+            console.log('LiteVideoControl: Active Video:', video);
             if (!video) return;
 
             const actionName = action[0];
