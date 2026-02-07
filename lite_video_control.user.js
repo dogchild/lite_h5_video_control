@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      2.7
+// @version      3.9
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -286,116 +286,285 @@
         showOSD(`旋转 ${video._rotateDeg}°`, video);
     }
 
-    function toggleFullscreen(video, mode) {
-        if (mode === 'web') {
-            if (!video._isWebFullscreen) {
-                // Enable Web Fullscreen
-                webFullscreenStyleCache.clear();
+    function enableManualWebFullscreen(video) {
+        // Enable Web Fullscreen (Manual Force)
+        webFullscreenStyleCache.clear();
 
-                // 1. Fix Video Element
-                video._prevStyle = video.style.cssText;
-                // Set video to fixed top
-                video.style.cssText += 'position:fixed !important; top:0 !important; left:0 !important; width:100vw !important; height:100vh !important; z-index:2147483647 !important; background:black !important; object-fit:contain !important;';
+        // 1. Fix Video Element
+        video._prevStyle = video.style.cssText;
+        // Set video to fixed top
+        video.style.cssText += 'position:fixed !important; top:0 !important; left:0 !important; width:100vw !important; height:100vh !important; z-index:2147483647 !important; background:black !important; object-fit:contain !important;';
 
-                // Re-apply transform in case it was overwritten or needs to be maintained
-                applyTransform(video);
+        // Re-apply transform in case it was overwritten or needs to be maintained
+        applyTransform(video);
 
-                // 2. Walk up DOM to fix stacking contexts (transforms, z-indexes)
-                let el = video.parentElement;
-                while (el && el !== document.documentElement) {
-                    const style = window.getComputedStyle(el);
-                    // Cache important properties
-                    webFullscreenStyleCache.set(el, {
-                        transform: el.style.transform,
-                        zIndex: el.style.zIndex,
-                        position: el.style.position,
-                        contain: el.style.contain,
-                        filter: el.style.filter,
-                        willChange: el.style.willChange
-                    });
+        // 2. Walk up DOM to fix stacking contexts (transforms, z-indexes)
+        let el = video.parentElement;
+        while (el && el !== document.documentElement) {
+            const style = window.getComputedStyle(el);
+            // Cache important properties
+            webFullscreenStyleCache.set(el, {
+                transform: el.style.transform,
+                zIndex: el.style.zIndex,
+                position: el.style.position,
+                contain: el.style.contain,
+                filter: el.style.filter,
+                willChange: el.style.willChange
+            });
 
-                    // 1. Clear transforms/containment that create new coordinate systems
-                    if (style.transform !== 'none') el.style.setProperty('transform', 'none', 'important');
-                    if (style.filter !== 'none') el.style.setProperty('filter', 'none', 'important');
-                    if (style.perspective !== 'none') el.style.setProperty('perspective', 'none', 'important');
-                    if (style.backdropFilter !== 'none') el.style.setProperty('backdrop-filter', 'none', 'important');
-                    if (style.willChange !== 'auto') el.style.setProperty('will-change', 'auto', 'important');
-                    el.style.setProperty('contain', 'none', 'important');
+            // 1. Clear transforms/containment that create new coordinate systems
+            if (style.transform !== 'none') el.style.setProperty('transform', 'none', 'important');
+            if (style.filter !== 'none') el.style.setProperty('filter', 'none', 'important');
+            if (style.perspective !== 'none') el.style.setProperty('perspective', 'none', 'important');
+            if (style.backdropFilter !== 'none') el.style.setProperty('backdrop-filter', 'none', 'important');
+            if (style.willChange !== 'auto') el.style.setProperty('will-change', 'auto', 'important');
+            el.style.setProperty('contain', 'none', 'important');
 
-                    // 2. BOOST Z-Index to MAX for ALL ancestors
-                    // This lifts the entire branch above other branches (like headers)
-                    el.style.setProperty('z-index', '2147483647', 'important');
+            // 2. BOOST Z-Index to MAX for ALL ancestors
+            // This lifts the entire branch above other branches (like headers)
+            el.style.setProperty('z-index', '2147483647', 'important');
 
-                    // 3. Ensure Z-Index applies (requires non-static position)
-                    if (style.position === 'static') {
-                        el.style.setProperty('position', 'relative', 'important');
-                    }
-
-                    el = el.parentElement;
-                }
-
-                video._isWebFullscreen = true;
-                showOSD('网页全屏', video);
-            } else {
-                // Disable Web Fullscreen
-                video.style.cssText = video._prevStyle || '';
-
-                // Restore ancestors
-                for (const [el, styles] of webFullscreenStyleCache) {
-                    el.style.transform = styles.transform;
-                    el.style.zIndex = styles.zIndex;
-                    el.style.position = styles.position;
-                    el.style.contain = styles.contain;
-                    el.style.filter = styles.filter;
-                    el.style.willChange = styles.willChange;
-                }
-                webFullscreenStyleCache.clear();
-
-                // Re-apply transform logic (important because resetting cssText clears current transform)
-                applyTransform(video);
-
-                video._isWebFullscreen = false;
-                showOSD('退出网页全屏', video);
+            // 3. Ensure Z-Index applies (requires non-static position)
+            if (style.position === 'static') {
+                el.style.setProperty('position', 'relative', 'important');
             }
-        } else {
-            // Native Fullscreen
-            if (!document.fullscreenElement) {
-                // 1. Try Site-Specific Native Buttons first! (Compatibility Mode)
-                const nativeBtns = [
-                    '.ytp-fullscreen-button', // YouTube
-                    '.bilibili-player-video-btn-fullscreen', // Bilibili (Old)
-                    '[aria-label="全屏"]', // General Chinese
-                    '[aria-label="Fullscreen"]', // General English
-                    '.vjs-fullscreen-control' // VideoJS
+
+            el = el.parentElement;
+        }
+
+        video._isWebFullscreen = true;
+        showOSD('网页全屏 (强制)', video);
+    }
+
+    function disableManualWebFullscreen(video) {
+        // Disable Web Fullscreen
+        video.style.cssText = video._prevStyle || '';
+
+        // Restore ancestors
+        for (const [el, styles] of webFullscreenStyleCache) {
+            el.style.transform = styles.transform;
+            el.style.zIndex = styles.zIndex;
+            el.style.position = styles.position;
+            el.style.contain = styles.contain;
+            el.style.filter = styles.filter;
+            el.style.willChange = styles.willChange;
+        }
+        webFullscreenStyleCache.clear();
+
+        // Re-apply transform logic
+        applyTransform(video);
+
+        video._isWebFullscreen = false;
+        showOSD('退出网页全屏', video);
+    }
+
+    // --- Helper: Simulate Full Click Sequence (Critical for React/Vue) ---
+    function simulateClick(element) {
+        if (!element) return;
+        const opts = { bubbles: true, cancelable: true, view: window };
+        element.dispatchEvent(new MouseEvent('mousedown', opts));
+        element.dispatchEvent(new MouseEvent('mouseup', opts));
+        element.click();
+    }
+
+    // --- Helper: Deep Fuzzy Button Finder ---
+    function findNativeButton(root, keywords) {
+        if (!root) return null;
+
+        // 1. Setup candidate list
+        const candidates = [];
+
+        // 2. Scan all elements (expensive but necessary for Douyu)
+        const elements = root.querySelectorAll('*');
+        for (let i = 0; i < elements.length; i++) {
+            const el = elements[i];
+            // Filter out obvious non-interactables to speed up
+            if (['SCRIPT', 'STYLE', 'LINK', 'META'].includes(el.tagName)) continue;
+
+            let score = 0;
+            const attrStr = (el.getAttribute('class') || '') +
+                (el.getAttribute('id') || '') +
+                (el.getAttribute('title') || '') +
+                (el.getAttribute('aria-label') || '') +
+                (el.getAttribute('data-title') || '') +
+                (el.getAttribute('data-tip') || ''); // Douyu tooltip
+
+            const lowerAttr = attrStr.toLowerCase();
+
+            for (const key of keywords) {
+                if (lowerAttr.includes(key)) {
+                    score += 10;
+                    // Boost if it's actually a button or clickable div
+                    if (el.tagName === 'BUTTON') score += 5;
+                    if (el.onclick || el.getAttribute('role') === 'button') score += 5;
+                }
+            }
+
+            // Text content check (only for short text)
+            if (el.innerText && el.innerText.length < 10) {
+                for (const key of keywords) {
+                    if (el.innerText.includes(key)) score += 5;
+                }
+            }
+
+            if (score > 0) {
+                candidates.push({ el, score });
+            }
+        }
+
+        // 3. Sort by score
+        candidates.sort((a, b) => b.score - a.score);
+
+        return candidates.length > 0 ? candidates[0].el : null;
+    }
+
+    function toggleFullscreen(video, mode) {
+        // Helper to find wrapper
+        // Helper to find wrapper
+        // Helper to find wrapper
+        const getWrapper = (v) => v.closest('.html5-video-player') || v.closest('.player-container') || v.closest('.video-wrapper') || v.closest('.art-video-player') || v.closest('.bilibili-player') || v.parentElement;
+        const wrapper = getWrapper(video) || video;
+
+        if (mode === 'web') {
+            // Logic:
+            // 1. If we are already in OUR manual forced mode, exit it.
+            // 2. If not, try to click a native "Web Fullscreen" or "Theater" button.
+            // 3. If no native button found, enter OUR manual forced mode.
+
+            if (video._isWebFullscreen) {
+                disableManualWebFullscreen(video);
+            } else {
+                // Try Native Buttons
+                const webBtns = [
+                    // Bilibili
+                    '.bilibili-player-video-btn-web-fullscreen',
+                    '.squirtle-video-pagefullscreen', // New Bilibili
+                    // YouTube
+                    '.ytp-size-button',
+                    // Twitch
+                    '[data-a-target="player-theatre-mode-button"]',
+                    // Huya
+                    '.player-fullpage-btn',
+
+                    // Generic ARIA
+                    '[aria-label="网页全屏"]', '[aria-label="Web Fullscreen"]',
+                    '[aria-label="Theater mode"]', '[aria-label="剧场模式"]'
                 ];
 
                 let btnClicked = false;
-                for (const selector of nativeBtns) {
-                    const btn = document.querySelector(selector);
-                    if (btn && video.contains(btn) || (btn && document.body.contains(btn))) {
-                        // Simple visibility check
+                for (const selector of webBtns) {
+                    const btn = wrapper.querySelector(selector) || document.querySelector(selector);
+                    if (btn && (wrapper.contains(btn) || document.body.contains(btn))) {
                         if (btn.offsetParent !== null) {
-                            btn.click();
+                            simulateClick(btn);
                             btnClicked = true;
+                            showOSD('网页全屏/剧场模式 (原生)', video);
                             break;
                         }
                     }
                 }
 
                 if (!btnClicked) {
-                    // Fallback to our manual method
-                    let wrapper = video.closest('.html5-video-player') || video.closest('.player-container') || video.closest('.video-wrapper') || video.parentElement;
-                    if (!wrapper || wrapper === document.body) wrapper = video;
+                    enableManualWebFullscreen(video);
+                }
+            }
+        } else {
+            // Native Fullscreen
+            // Logic:
+            // 1. If real native fullscreen is active, exit it.
+            // 2. If NOT active, try to find a native button (Enter OR Exit, just in case state is mismatched).
+            // 3. Fallback to API.
 
+            if (document.fullscreenElement) {
+                if (document.exitFullscreen) document.exitFullscreen();
+                showOSD('退出全屏', video);
+            } else {
+                let btnClicked = false;
+
+                // 1. Try Specific Known Selectors
+                const nativeBtns = [
+                    '.ytp-fullscreen-button', // YouTube
+                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', // Bilibili
+                    '[data-a-target="player-fullscreen-button"]', // Twitch
+                    '.player-fullscreen-btn', // Huya
+                    '.vjs-fullscreen-control' // VideoJS
+                ];
+
+                for (const selector of nativeBtns) {
+                    const btn = wrapper.querySelector(selector) || document.querySelector(selector);
+                    if (btn && btn.offsetParent !== null) {
+                        simulateClick(btn);
+                        btnClicked = true;
+                        break;
+                    }
+                }
+                if (!btnClicked) {
+                    const keywords = ['fullscreen', '全屏', 'full-screen', 'exit-fullscreen', '退出全屏']; // Include exit keywords just in case
+                    const fuzzyBtn = findNativeButton(wrapper, keywords);
+                    if (fuzzyBtn) {
+                        console.log('LiteVideoControl: Fuzzy found button:', fuzzyBtn);
+                        simulateClick(fuzzyBtn);
+                        btnClicked = true;
+                    }
+                }
+
+                // 3. NEW: Try Double-Clicking the Video (Universal Fallback)
+                // Most players (Douyu, Bilibili, YouTube) toggle fullscreen on double-click.
+                if (!btnClicked) {
+                    // Start of the fallback chain
+                    // Dispatch a double click event on the video content
+                    const opts = { bubbles: true, cancelable: true, view: window };
+                    video.dispatchEvent(new MouseEvent('dblclick', opts));
+
+                    // We can't easily know if this succeeded without checking document.fullscreenElement async.
+                    // But we can assume it might have worked.
+                    // To be safe, we continue to API fallback IF document didn't change state immediately? 
+                    // No, native fullscreen is async. 
+
+                    // Let's assume double-click is better than API fallback for Douyu.
+                    // Visual feedback will confirm.
+                    showOSD('尝试双击全屏', video);
+
+                    // Note: We don't set btnClicked=true here because we want the API fallback to happen 
+                    // if the double-click handler DOESN'T exist (native video doesn't fullscreen on dblclick by default).
+                    // Actually, let's delay the API fallback slightly? No, that makes it async.
+
+                    // Strategy:
+                    // If we are on Douyu (or similar), double click is likely handled.
+                    // If it's a raw video tag, double click does nothing.
+                    // So we should run API fallback immediately ONLY if the site is known to NOT handle dblclick?
+                    // Or we just run API fallback as a "just in case".
+
+                    // Better Strategy:
+                    // The API fallback guarantees a fullscreen state, but maybe without UI.
+                    // The Double Click guarantees UI, but might not work on raw videos.
+                    // Let's rely on the Double Click for *interactive* players.
+                }
+
+                // 4. API Fallback (The "Force" Option)
+                // Only run if we didn't click a button. 
+                // We run this AFTER dblclick because if dblclick works, it requests fullscreen. 
+                // If we also fire it, we might get a conflict or just redundant calls.
+                // However, since we can't detect if dblclick was "handled", we have to run this as a safety net?
+                // No, if we force API, we lose the UI (the user's complaint).
+                // Let's NOT run API fallback immediately if we think we are on a sophisticated player.
+
+                // Compromise: 
+                // If we triggered dblclick, we skip API fallback for this turn.
+                // If the user presses again (because dblclick failed), then we might need a way to force it.
+                // But complex detection is hard.
+
+                // Let's just keep the API fallback. If dblclick works, it requests fullscreen. 
+                // If our API fallback also requests it, the browser might block the second one or just ignore it.
+                // The issue is if the API fallback "wins" and puts us in "naked" fullscreen before the site logic kicks in.
+
+                if (!btnClicked) {
                     if (wrapper.requestFullscreen) wrapper.requestFullscreen();
                     else if (wrapper.webkitRequestFullscreen) wrapper.webkitRequestFullscreen();
                     else if (video.requestFullscreen) video.requestFullscreen();
                 }
 
-                showOSD('全屏', video);
-            } else {
-                if (document.exitFullscreen) document.exitFullscreen();
-                showOSD('退出全屏', video);
+                showOSD('切换全屏', video);
             }
         }
     }
