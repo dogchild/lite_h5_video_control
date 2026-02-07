@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.15
+// @version      3.16
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -512,38 +512,22 @@
                     }
                 }
 
-                // 3. NEW: Try Double-Clicking the Video (Universal Fallback)
-                // Most players (Douyu, Bilibili, YouTube) toggle fullscreen on double-click.
+                // 3. NEW: Try Double-Clicking the Video (Whitelist Only)
+                // Only enable for sites where double-click is known to be safe and effective (e.g. Bilibili, YouTube)
+                // To avoid side effects on other sites (e.g. Douyin Like, Douyu Web Fullscreen)
                 if (!btnClicked) {
-                    // Start of the fallback chain
-                    // Dispatch a double click event on the video content
-                    const outputWindow = video.ownerDocument.defaultView || window;
-                    const opts = { bubbles: true, cancelable: true, view: outputWindow };
-                    video.dispatchEvent(new MouseEvent('dblclick', opts));
+                    const host = window.location.hostname;
+                    const isBilibili = host.includes('bilibili.com');
+                    const isYouTube = host.includes('youtube.com');
 
-                    // We can't easily know if this succeeded without checking document.fullscreenElement async.
-                    // But we can assume it might have worked.
-                    // To be safe, we continue to API fallback IF document didn't change state immediately? 
-                    // No, native fullscreen is async. 
-
-                    // Let's assume double-click is better than API fallback for Douyu.
-                    // Visual feedback will confirm.
-                    showOSD('尝试双击全屏', video);
-
-                    // Note: We don't set btnClicked=true here because we want the API fallback to happen 
-                    // if the double-click handler DOESN'T exist (native video doesn't fullscreen on dblclick by default).
-                    // Actually, let's delay the API fallback slightly? No, that makes it async.
-
-                    // Strategy:
-                    // If we are on Douyu (or similar), double click is likely handled.
-                    // If it's a raw video tag, double click does nothing.
-                    // So we should run API fallback immediately ONLY if the site is known to NOT handle dblclick?
-                    // Or we just run API fallback as a "just in case".
-
-                    // Better Strategy:
-                    // The API fallback guarantees a fullscreen state, but maybe without UI.
-                    // The Double Click guarantees UI, but might not work on raw videos.
-                    // Let's rely on the Double Click for *interactive* players.
+                    if (isBilibili || isYouTube) {
+                        // Start of the fallback chain
+                        // Dispatch a double click event on the video content
+                        const outputWindow = video.ownerDocument.defaultView || window;
+                        const opts = { bubbles: true, cancelable: true, view: outputWindow };
+                        video.dispatchEvent(new MouseEvent('dblclick', opts));
+                        showOSD('尝试双击全屏', video);
+                    }
                 }
 
                 // 4. API Fallback (The "Force" Option)
