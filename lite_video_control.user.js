@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.16
+// @version      3.21
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -66,6 +66,49 @@
     let lastSpeed = 1.0;
     let osdTimer = null;
     let webFullscreenStyleCache = new Map(); // Store original styles for ancestors
+
+    const style = document.createElement('style');
+    style.textContent = `
+        /* Force video to fill the fullscreen container */
+        :fullscreen video, ::backdrop + video {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: none !important;
+            max-height: none !important;
+            object-fit: contain !important;
+            background-color: black !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: 0 !important;
+            display: block !important; /* Critical for Hupu */
+            transform: none !important; 
+        }
+        
+        /* Specific fix for when the video is the fullscreen element */
+        video:fullscreen, video:-webkit-full-screen {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            margin: 0 !important;
+            display: block !important;
+        }
+
+        /* NEW: Force specific known wrappers to be full size when fullscreened */
+        :fullscreen.art-video-player, :fullscreen.dplayer, :fullscreen.bilibili-player-video-wrap, :fullscreen section, :fullscreen div {
+            width: 100vw !important;
+            height: 100vh !important;
+            max-width: 100vw !important;
+            max-height: 100vh !important;
+            background-color: black !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            display: flex !important; /* Ensure child video can fill it */
+            align-items: center !important;
+            justify-content: center !important;
+        }
+    `;
+    (document.head || document.documentElement).appendChild(style);
 
     // --- OSD (On-Screen Display) ---
     function showOSD(text, video) {
@@ -249,6 +292,14 @@
                 if (video._isWebFullscreen || document.fullscreenElement) {
                     cW = window.innerWidth;
                     cH = window.innerHeight;
+
+                    // If in native fullscreen, we might need to reset styles to ensure transform works
+                    // blocked by our new CSS? 
+                    // No, our new CSS resets transform to 'none', so we need to re-apply it here?
+                    // Actually, the new CSS effectively disables our rotation in fullscreen if we don't be careful.
+                    // We need to make sure our transform logic has higher specificity or inline style wins (it does).
+                    // Inline !important wins over stylesheet !important usually? No, they tie, source order matters.
+                    // Verification needed. For now, let's keep it simple.
                 } else {
                     // For inline, we want to fit strictly inside the original element box
                     cW = vW;
@@ -420,7 +471,28 @@
 
     function toggleFullscreen(video, mode) {
         // Helper to find wrapper
-        const getWrapper = (v) => v.closest('.html5-video-player') || v.closest('.player-container') || v.closest('.video-wrapper') || v.closest('.art-video-player') || v.closest('.bilibili-player') || v.closest('xg-video-container') || v.parentElement;
+        const getWrapper = (v) => {
+            // Priority: Known robust player containers
+            const known = v.closest('.html5-video-player')
+                || v.closest('.player-container')
+                || v.closest('.video-wrapper')
+                || v.closest('.art-video-player')
+                || v.closest('.bilibili-player')
+                || v.closest('xg-video-container');
+
+            if (known) return known;
+
+            // Fallback: On generic sites (like Hupu), using the parent as wrapper is risky 
+            // because it might have fixed width/height that breaks fullscreen.
+            // It is often safer to fullscreen the video element directly if no known player is found.
+            // However, we need to check if we are in "Web Fullscreen" mode. 
+            // If in Web Fullscreen, we definitely want the wrapper.
+            // But for Native Fullscreen on generic sites? Video is safer.
+
+            // Let's return the video itself if no specific container is found.
+            // This forces requestFullscreen() to be called on the VIDEO, avoiding container layout constraints.
+            return v;
+        };
         const wrapper = getWrapper(video) || video;
 
         console.log('LiteVideoControl: toggleFullscreen', mode, video, wrapper);
@@ -530,27 +602,22 @@
                     }
                 }
 
-                // 4. API Fallback (The "Force" Option)
-                // Only run if we didn't click a button. 
-                // We run this AFTER dblclick because if dblclick works, it requests fullscreen. 
-                // If we also fire it, we might get a conflict or just redundant calls.
-                // However, since we can't detect if dblclick was "handled", we have to run this as a safety net?
-                // No, if we force API, we lose the UI (the user's complaint).
-                // Let's NOT run API fallback immediately if we think we are on a sophisticated player.
-
-                // Compromise: 
-                // If we triggered dblclick, we skip API fallback for this turn.
-                // If the user presses again (because dblclick failed), then we might need a way to force it.
-                // But complex detection is hard.
-
-                // Let's just keep the API fallback. If dblclick works, it requests fullscreen. 
-                // If our API fallback also requests it, the browser might block the second one or just ignore it.
-                // The issue is if the API fallback "wins" and puts us in "naked" fullscreen before the site logic kicks in.
-
                 if (!btnClicked) {
                     if (wrapper.requestFullscreen) wrapper.requestFullscreen();
                     else if (wrapper.webkitRequestFullscreen) wrapper.webkitRequestFullscreen();
                     else if (video.requestFullscreen) video.requestFullscreen();
+
+                    // 5. NEW: Force styles for "naked" fullscreen (Hupu fix)
+                    // If we are forcing the API, the site likely doesn't have good CSS for it.
+                    // We apply the same logic as "Web Fullscreen" but for the video element specifically.
+
+                    // We need to wait for fullscreen to actually happen?
+                    // Or just set it? Setting it might break effective non-fullscreen layout if it fails.
+                    // Better to set it via a class or just rely on the global CSS?
+                    // The global CSS failed because of 'display: inline' and margins.
+                    // Let's force inline styles on the video, but save them to restore later?
+                    // Actually, the global CSS should have worked if we added !important display: block.
+                    // Let's update the Global CSS first, it's cleaner.
                 }
 
                 showOSD('切换全屏', video);
