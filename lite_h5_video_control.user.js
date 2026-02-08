@@ -3,12 +3,13 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      3.36
+// @version      3.37
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @author       dogchild
-// @license MIT
+// @license      MIT
+// @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cGF0aCBkPSJNMjU2IDhDMTE5IDggOCAxMTkgOCAyNTZzMTExIDI0OCAyNDggMjQ4IDI0OC0xMTEgMjQ4LTI0OFMzOTMgOCAyNTYgOHptMTE1LjcgMjcybC0xNzYgMTAxYy0xNS44IDguOC0zNS43LTIuNS0zNS43LTIxVjE1MmMwLTE4LjQgMTkuOC0yOS44IDM1LjctMjFsMTc2IDEwMWMxNi40IDkuMiAxNi40IDMyLjkgMCA0MnoiLz48L3N2Zz4=
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue
