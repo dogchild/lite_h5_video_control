@@ -47,7 +47,7 @@ Provides functionalities like playback speed control, seek, volume control, full
 ## 🛠️ Installation
 
 1.  Install the [Tampermonkey](https://www.tampermonkey.net/) extension.
-2.  Install this script (Replace with your link) or copy the code from `lite_h5_video_control.user.js`.
+2.  Install this script [here](https://github.com/dogchild/lite_h5_video_control/raw/refs/heads/main/lite_h5_video_control.user.js) or copy the code from `lite_h5_video_control.user.js`.
 3.  Open any video website to use.
 
 ## ⚙️ Configuration

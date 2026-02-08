@@ -47,7 +47,7 @@
 ## 🛠️ 安装方法
 
 1.  安装浏览器扩展 [Tampermonkey](https://www.tampermonkey.net/) (油猴)。
-2.  点击 [这里安装脚本](#) (请替换为你的发布链接) 或将 `lite_h5_video_control.user.js` 代码复制到新脚本中。
+2.  点击 [这里安装脚本](https://github.com/dogchild/lite_h5_video_control/raw/refs/heads/main/lite_h5_video_control.user.js) 或将 `lite_h5_video_control.user.js` 代码复制到新脚本中。
 3.  打开任意视频网站即可使用。
 
 ## ⚙️ 设置
