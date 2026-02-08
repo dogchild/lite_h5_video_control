@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      3.37
+// @version      3.39
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
@@ -39,6 +39,7 @@
             webFSNative: 'Web Fullscreen (Native)',
             exitWebFS: 'Exit Web Fullscreen',
             exitFS: 'Exit Fullscreen',
+            fullscreen: 'Fullscreen',
             fsAPI: 'Fullscreen (API)',
             tryDblClick: 'Try Double-Click',
             next: 'Playing Next',
@@ -79,6 +80,7 @@
             webFSNative: '网页全屏 (原生)',
             exitWebFS: '退出网页全屏',
             exitFS: '退出全屏',
+            fullscreen: '全屏',
             fsAPI: '全屏 (API)',
             tryDblClick: '尝试双击',
             next: '播放下一集',
@@ -615,6 +617,7 @@
      */
     function getWrapper(v) {
         const KNOWN_WRAPPERS = [
+            '.bpx-player-container',     // Bilibili (New)
             '.html5-video-player',       // YouTube / Generic
             '.player-container',         // Generic
             '.video-wrapper',            // Generic
@@ -648,14 +651,14 @@
             } else {
                 // Try finding Native "Web Fullscreen" / "Theatre Mode" buttons first
                 const webSelectors = [
-                    '.bilibili-player-video-btn-web-fullscreen', '.squirtle-video-pagefullscreen',
+                    '.bilibili-player-video-btn-web-fullscreen', '.squirtle-video-pagefullscreen', '.bpx-player-ctrl-web',
                     '.ytp-size-button',
                     '[data-a-target="player-theatre-mode-button"]',
                     '.player-fullpage-btn',
                     'xg-icon.xgplayer-page-full-screen', '[data-e2e="xgplayer-page-full-screen"]'
                 ];
                 // Keywords for fuzzy matching
-                const webKeywords = ['web fullscreen', '网页全屏', 'theater', '宽屏'];
+                const webKeywords = ['web fullscreen', '网页全屏', 'theater'];
 
                 const btn = findControlBtn(document, webSelectors, webKeywords); // Search global because web fs buttons might be outside wrapper
                 if (btn) {
@@ -669,12 +672,14 @@
             // Native Fullscreen
             if (document.fullscreenElement) {
                 if (document.exitFullscreen) document.exitFullscreen();
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
                 showOSD(T.exitFS, video);
+                video.focus(); // Restore focus to video (Fixes Hupu/Generic sites losing focus after exit)
             } else {
                 // 1. Try Known Native Buttons
                 const nativeSelectors = [
                     '.ytp-fullscreen-button',
-                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen',
+                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', '.bpx-player-ctrl-full',
                     '[data-a-target="player-fullscreen-button"]',
                     '.player-fullscreen-btn',
                     '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]',
@@ -688,6 +693,7 @@
 
                 if (btn) {
                     simulateClick(btn);
+                    showOSD(T.fullscreen, video); // Show OSD for native button clicks too
                 } else {
                     // 2. Double Click Fallback (Whitelist)
                     const host = window.location.hostname;
