@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.34
+// @version      3.35
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -13,6 +13,94 @@
 
 (function () {
     'use strict';
+
+    // --- Internationalization (i18n) ---
+    const LANG = navigator.language.startsWith('zh') ? 'zh' : 'en';
+
+    const TEXT = {
+        en: {
+            vol: 'Volume',
+            mute: 'Muted',
+            unmute: 'Unmuted',
+            seekFwd: 'Forward',
+            seekBwd: 'Rewind',
+            speed: 'Speed',
+            mirrorOn: 'Mirror On',
+            mirrorOff: 'Mirror Off',
+            rotate: 'Rotate',
+            webFS: 'Web Fullscreen',
+            webFSForced: 'Web Fullscreen (Forced)',
+            webFSNative: 'Web Fullscreen (Native)',
+            exitWebFS: 'Exit Web Fullscreen',
+            exitFS: 'Exit Fullscreen',
+            fsAPI: 'Fullscreen (API)',
+            tryDblClick: 'Try Double-Click',
+            next: 'Playing Next',
+            prev: 'Playing Previous',
+            nextNotFound: 'Next button not found',
+            prevNotFound: 'Previous button not found',
+            settingsTitle: 'Lite Video Control Settings',
+            menuSettings: 'Settings',
+            save: 'Save',
+            cancel: 'Cancel',
+            saved: 'Settings Saved',
+            conflict: 'Conflict detected!',
+            conflictMsg: 'Cannot save: Resolve conflicts first',
+            keys: {
+                seekForward: 'Seek Forward (Small)', seekBackward: 'Seek Backward (Small)',
+                seekForwardLarge: 'Seek Forward (Large)', seekBackwardLarge: 'Seek Backward (Large)',
+                volUp: 'Volume Up (Small)', volDown: 'Volume Down (Small)',
+                volUpLarge: 'Volume Up (Large)', volDownLarge: 'Volume Down (Large)',
+                mute: 'Toggle Mute', mirror: 'Toggle Mirror', rotate: 'Rotate 90°',
+                speedUp: 'Speed Up', speedDown: 'Speed Down', speedReset: 'Reset Speed',
+                fullscreen: 'Native Fullscreen', webFullscreen: 'Web Fullscreen',
+                nextVideo: 'Next Video', prevVideo: 'Previous Video',
+                speed1: 'Speed 1x', speed2: 'Speed 2x', speed3: 'Speed 3x', speed4: 'Speed 4x'
+            }
+        },
+        zh: {
+            vol: '音量',
+            mute: '已静音',
+            unmute: '已取消静音',
+            seekFwd: '快进',
+            seekBwd: '快退',
+            speed: '倍速',
+            mirrorOn: '镜像开启',
+            mirrorOff: '镜像关闭',
+            rotate: '旋转',
+            webFS: '网页全屏',
+            webFSForced: '网页全屏 (强制)',
+            webFSNative: '网页全屏 (原生)',
+            exitWebFS: '退出网页全屏',
+            exitFS: '退出全屏',
+            fsAPI: '全屏 (API)',
+            tryDblClick: '尝试双击',
+            next: '播放下一集',
+            prev: '播放上一集',
+            nextNotFound: '未找到下一集按钮',
+            prevNotFound: '未找到上一集按钮',
+            settingsTitle: '视频控制脚本设置',
+            menuSettings: '设置',
+            save: '保存',
+            cancel: '取消',
+            saved: '设置已保存',
+            conflict: '按键冲突!',
+            conflictMsg: '无法保存: 请先解决按键冲突',
+            keys: {
+                seekForward: '快进 (小幅)', seekBackward: '快退 (小幅)',
+                seekForwardLarge: '快进 (大幅)', seekBackwardLarge: '快退 (大幅)',
+                volUp: '音量增大 (小幅)', volDown: '音量减小 (小幅)',
+                volUpLarge: '音量增大 (大幅)', volDownLarge: '音量减小 (大幅)',
+                mute: '静音/取消静音', mirror: '镜像翻转', rotate: '旋转 90°',
+                speedUp: '加速', speedDown: '减速', speedReset: '重置速度',
+                fullscreen: '全屏', webFullscreen: '网页全屏',
+                nextVideo: '下一集', prevVideo: '上一集',
+                speed1: '1倍速', speed2: '2倍速', speed3: '3倍速', speed4: '4倍速'
+            }
+        }
+    };
+
+    const T = TEXT[LANG];
 
     // --- Configuration & State ---
     const DEFAULT_CONFIG = {
@@ -333,11 +421,11 @@
         if (actionType === 'next') {
             selectors = ['.ytp-next-button', '.bilibili-player-video-btn-next', '.squirtle-video-next', '[data-e2e="xgplayer-next"]'];
             keywords = ['next', '下一集', '下一个'];
-            osdText = 'Playing Next';
+            osdText = T.next;
         } else if (actionType === 'prev') {
             selectors = ['.ytp-prev-button'];
             keywords = ['previous', 'prev', '上一集', '上一个'];
-            osdText = 'Playing Previous';
+            osdText = T.prev;
         }
 
         const btn = findControlBtn(wrapper, selectors, keywords);
@@ -345,7 +433,7 @@
             simulateClick(btn);
             showOSD(osdText, video);
         } else {
-            showOSD(`${actionType === 'next' ? 'Next' : 'Previous'} button not found`, video);
+            showOSD(actionType === 'next' ? T.nextNotFound : T.prevNotFound, video);
         }
     }
 
@@ -356,20 +444,20 @@
             // For live streams or infinite buffers, just try setting it
             video.currentTime += delta;
         }
-        showOSD(`${delta > 0 ? 'Forward' : 'Rewind'} ${Math.abs(delta)}s`, video);
+        showOSD(`${delta > 0 ? T.seekFwd : T.seekBwd} ${Math.abs(delta)}s`, video);
     }
 
     function adjustVolume(video, delta) {
         let newVol = Math.min(1, Math.max(0, video.volume + delta));
         video.volume = newVol;
         const volPercent = Math.round(newVol * 100);
-        showOSD(`Volume ${volPercent}%`, video);
+        showOSD(`${T.vol} ${volPercent}%`, video);
     }
 
     function toggleMute(video) {
         video.muted = !video.muted;
         const volPercent = Math.round(video.volume * 100);
-        showOSD(video.muted ? 'Muted' : `Volume ${volPercent}%`, video);
+        showOSD(video.muted ? T.mute : `${T.vol} ${volPercent}%`, video);
     }
 
     function adjustSpeed(video, action) {
@@ -390,7 +478,7 @@
         }
         // Round to 1 decimal place to prevent floating point errors (e.g. 1.10000002)
         video.playbackRate = Math.round(video.playbackRate * 10) / 10;
-        showOSD(`Speed ${video.playbackRate}x`, video);
+        showOSD(`${T.speed} ${video.playbackRate}x`, video);
     }
 
     /**
@@ -433,14 +521,14 @@
     function toggleMirror(video) {
         video._isMirrored = !video._isMirrored;
         applyTransform(video);
-        showOSD(video._isMirrored ? 'Mirror On' : 'Mirror Off', video);
+        showOSD(video._isMirrored ? T.mirrorOn : T.mirrorOff, video);
     }
 
     function rotateVideo(video) {
         video._rotateDeg = (video._rotateDeg || 0) + 90;
         if (video._rotateDeg >= 360) video._rotateDeg = 0;
         applyTransform(video);
-        showOSD(`Rotate ${video._rotateDeg}°`, video);
+        showOSD(`${T.rotate} ${video._rotateDeg}°`, video);
     }
 
     /**
@@ -489,7 +577,7 @@
         }
 
         video._isWebFullscreen = true;
-        showOSD('Web Fullscreen (Forced)', video);
+        showOSD(T.webFSForced, video);
     }
 
     function disableManualWebFullscreen(video) {
@@ -509,7 +597,7 @@
 
         applyTransform(video);
         video._isWebFullscreen = false;
-        showOSD('Exit Web Fullscreen', video);
+        showOSD(T.exitWebFS, video);
     }
 
     /**
@@ -566,7 +654,7 @@
                 const btn = findControlBtn(document, webSelectors, webKeywords); // Search global because web fs buttons might be outside wrapper
                 if (btn) {
                     simulateClick(btn);
-                    showOSD('Web Fullscreen (Native)', video);
+                    showOSD(T.webFSNative, video);
                 } else {
                     enableManualWebFullscreen(video);
                 }
@@ -575,7 +663,7 @@
             // Native Fullscreen
             if (document.fullscreenElement) {
                 if (document.exitFullscreen) document.exitFullscreen();
-                showOSD('Exit Fullscreen', video);
+                showOSD(T.exitFS, video);
             } else {
                 // 1. Try Known Native Buttons
                 const nativeSelectors = [
@@ -600,7 +688,7 @@
                     const whitelist = ['bilibili.com', 'youtube.com', 'twitch.tv'];
                     if (whitelist.some(site => host.includes(site))) {
                         video.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
-                        showOSD('Try Double-Click', video);
+                        showOSD(T.tryDblClick, video);
                     } else {
                         // 3. API Force Fallback
                         const target = wrapper || video;
@@ -608,7 +696,7 @@
                         else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
                         else if (video.requestFullscreen) video.requestFullscreen();
 
-                        showOSD('Fullscreen (API)', video);
+                        showOSD(T.fsAPI, video);
                     }
                 }
             }
@@ -629,24 +717,14 @@
         `;
 
         const title = document.createElement('h3');
-        title.textContent = 'Lite Video Control Settings';
+        title.textContent = T.settingsTitle;
         title.style.marginTop = '0';
         container.appendChild(title);
 
         const form = document.createElement('div');
         form.style.display = 'grid'; form.style.gridTemplateColumns = '1fr 1fr'; form.style.gap = '10px';
 
-        const descriptions = {
-            seekForward: 'Seek Forward (Small)', seekBackward: 'Seek Backward (Small)',
-            seekForwardLarge: 'Seek Forward (Large)', seekBackwardLarge: 'Seek Backward (Large)',
-            volUp: 'Volume Up (Small)', volDown: 'Volume Down (Small)',
-            volUpLarge: 'Volume Up (Large)', volDownLarge: 'Volume Down (Large)',
-            mute: 'Toggle Mute', mirror: 'Toggle Mirror', rotate: 'Rotate 90°',
-            speedUp: 'Speed Up', speedDown: 'Speed Down', speedReset: 'Reset Speed',
-            fullscreen: 'Native Fullscreen', webFullscreen: 'Web Fullscreen',
-            nextVideo: 'Next Video', prevVideo: 'Previous Video',
-            speed1: 'Speed 1x', speed2: 'Speed 2x', speed3: 'Speed 3x', speed4: 'Speed 4x'
-        };
+        const descriptions = T.keys;
 
         const inputs = [];
 
@@ -671,7 +749,7 @@
                 if (conflicts.has(input)) {
                     input.style.border = '1px solid #ff4444';
                     input.style.backgroundColor = '#3e1111';
-                    input.title = 'Conflict detected!';
+                    input.title = T.conflict;
                 } else {
                     input.style.border = '1px solid #555';
                     input.style.backgroundColor = '#333';
@@ -737,7 +815,7 @@
         const btns = document.createElement('div');
 
         const saveBtn = document.createElement('button');
-        saveBtn.textContent = 'Save';
+        saveBtn.textContent = T.save;
         saveBtn.style.cssText = 'padding: 8px 16px; background: #4CAF50; color: white; border: none; cursor: pointer; border-radius: 4px;';
         saveBtn.onclick = () => {
             const hasConflict = checkConflicts();
@@ -757,11 +835,11 @@
             config.keys = newKeys;
             GM_setValue('lite_video_config', config);
             document.body.removeChild(container);
-            showOSD('Settings Saved');
+            showOSD(T.saved);
         };
 
         const cancelBtn = document.createElement('button');
-        cancelBtn.textContent = 'Cancel';
+        cancelBtn.textContent = T.cancel;
         cancelBtn.style.cssText = 'padding: 8px 16px; background: #666; color: white; border: none; margin-right: 10px; cursor: pointer; border-radius: 4px;';
         cancelBtn.onclick = () => document.body.removeChild(container);
 
@@ -835,6 +913,6 @@
     }, { capture: true }); // Capture phase to override site events
 
     // Register Menu
-    GM_registerMenuCommand('Settings', createSettingsUI);
+    GM_registerMenuCommand(T.menuSettings, createSettingsUI);
 
 })();
