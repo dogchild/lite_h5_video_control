@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.33
+// @version      3.34
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -47,6 +47,9 @@
         }
     };
 
+    /**
+     * Settings object backed by Tampermonkey storage.
+     */
     let config = GM_getValue('lite_video_config', DEFAULT_CONFIG);
 
     // --- Config Migration ---
@@ -63,13 +66,13 @@
     // --- Runtime State ---
     let lastSpeed = 1.0;
     let osdTimer = null;
-    let webFullscreenStyleCache = new Map(); // Store original styles for ancestors
+    const webFullscreenStyleCache = new Map(); // Store original styles for ancestors during Web Fullscreen
 
     /* 
      * Global CSS Injection
      * Purpose: 
-     * 1. Fix Hupu/Generic sites where video doesn't fill the screen in Native Fullscreen.
-     * 2. Force 'video:fullscreen' to block-level and 100% size to override inline/margin styles.
+     * 1. Fix Hupu/Generic sites where video containers don't fill the screen in Native Fullscreen.
+     * 2. Ensure OSD visibility by handling wrapper layout.
      */
     const style = document.createElement('style');
     style.textContent = `
@@ -95,7 +98,7 @@
             object-fit: contain !important;
             background: black !important;
         }
-        /* Fallback for when video element itself is fullscreen (shouldn't happen after this fix) */
+        /* Fallback for when video element itself is fullscreen */
         video:fullscreen, video:-webkit-full-screen {
             width: 100vw !important;
             height: 100vh !important;
@@ -107,12 +110,16 @@
 
     /**
      * Show On-Screen Display (OSD) notification.
-     * Mounts OSD inside fullscreenElement when in native fullscreen to ensure visibility.
+     * Handles displaying text feedback to the user.
+     * Dynamically adjusts mount point and position based on whether the browser is in Fullscreen mode.
+     * 
+     * @param {string} text - The message to display.
+     * @param {HTMLVideoElement} [video] - The video element to anchor OSD to (optional, used for positioning).
      */
     function showOSD(text, video) {
         let osd = document.getElementById('lite-video-osd');
 
-        // Lazy creation
+        // Lazy creation of OSD element
         if (!osd) {
             osd = document.createElement('div');
             osd.id = 'lite-video-osd';
@@ -135,28 +142,38 @@
             `;
         }
 
-        // Determine correct mount point
+        // Determine correct mount point to ensure visibility
         let mountPoint = document.body;
+
         if (document.fullscreenElement) {
             // In native fullscreen, OSD must be INSIDE the fullscreen container to be visible.
+            // If the fullscreen element is an iframe or generic container, we append to it.
+            // Note: If the fullscreen element is a VIDEO tag (rare with our fix, but possible),
+            // appending execution will fail silently or do nothing, which is an accepted limitation.
             mountPoint = document.fullscreenElement;
-            osd.style.position = 'absolute'; // Absolute within the fullscreen container
+
+            // Force Absolute positioning relative to the fullscreen container
+            osd.style.position = 'absolute';
             osd.style.top = '20px';
             osd.style.left = '20px';
         } else {
-            osd.style.position = 'fixed'; // Fixed relative to viewport
-            // Position relative to video if available
+            // In Windowed mode, use Fixed positioning relative to the Viewport
+            osd.style.position = 'fixed';
+
+            // Allow positioning OSD relative to the specific video if provided
             if (video) {
                 const rect = video.getBoundingClientRect();
+                // Ensure it doesn't go off-screen (negative values)
                 osd.style.top = Math.max(0, rect.top + 20) + 'px';
                 osd.style.left = Math.max(0, rect.left + 20) + 'px';
             } else {
+                // Default top-left fallback
                 osd.style.top = '20px';
                 osd.style.left = '20px';
             }
         }
 
-        // Move OSD to correct mount point if needed
+        // Move OSD to correct mount point if it has changed
         if (osd.parentNode !== mountPoint) {
             mountPoint.appendChild(osd);
         }
@@ -164,10 +181,11 @@
         osd.textContent = text;
         osd.style.display = 'block';
 
-        // Trigger reflow for transition
+        // Trigger reflow to restart CSS transition
         void osd.offsetWidth;
         osd.style.opacity = '1';
 
+        // Clear previous timer to prevent premature hiding
         if (osdTimer) clearTimeout(osdTimer);
         osdTimer = setTimeout(() => {
             osd.style.opacity = '0';
@@ -175,20 +193,29 @@
     }
 
     /**
-     * Retrieve all video elements from root and Shadow DOMs.
-     * Uses TreeWalker for efficient traversal.
-     * @param {Node} root 
-     * @returns {HTMLVideoElement[]}
+     * Retrieve all video elements from the document, traversing Shadow DOMs.
+     * Optimized: Uses iterative TreeWalker to avoid recursion limits and improve performance.
+     * 
+     * @param {Node} root - The root node to start searching from (default: document).
+     * @returns {HTMLVideoElement[]} - Array of found video elements.
      */
     function getAllVideos(root = document) {
-        let videos = Array.from(root.querySelectorAll('video'));
+        let videos = [];
 
+        // Add videos from current root
+        const nodes = root.querySelectorAll('video');
+        for (let i = 0; i < nodes.length; i++) {
+            videos.push(nodes[i]);
+        }
+
+        // Traverse Shadow Roots
         const treeWalker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
             acceptNode: (node) => node.shadowRoot ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
         });
 
         let node;
         while ((node = treeWalker.nextNode())) {
+            // Recursively check Shadow Roots (breadth-first implicit via walker)
             videos = videos.concat(getAllVideos(node.shadowRoot));
         }
         return videos;
@@ -196,111 +223,147 @@
 
     /**
      * Identify the "Active" video to control.
-     * Priority: 
-     * 1. Currently Playing (and visible)
-     * 2. Largest Visible
-     * 3. First Found
+     * Heuristic Priority: 
+     * 1. Currently Playing (and visible) - Fastest check.
+     * 2. Largest Visible Video in Viewport.
+     * 3. First Found Video (Fallback).
+     * 
      * @returns {HTMLVideoElement|null}
      */
     function getActiveVideo() {
         const videos = getAllVideos();
         if (videos.length === 0) return null;
 
-        // Optimization: Check playing status first (fastest heuristic)
-        // readyState > 2 means HAVE_CURRENT_DATA or HAVE_ENOUGH_DATA
+        // Optimization: Plays state check is much cheaper than layout geometry.
+        // readyState > 2 means HAVE_CURRENT_DATA or HAVE_ENOUGH_DATA (actually playable).
         const playing = videos.find(v => !v.paused && v.style.display !== 'none' && v.readyState > 2);
         if (playing) return playing;
 
         let bestCandidate = null;
         let maxArea = 0;
+        const viewportArea = window.innerWidth * window.innerHeight;
 
-        // We only check viewport if no video is playing
-        videos.forEach(v => {
-            if (v.style.display === 'none') return;
+        // Geometry check: Find largest video currently in viewport
+        for (let i = 0; i < videos.length; i++) {
+            const v = videos[i];
+            if (v.style.display === 'none') continue;
 
             const rect = v.getBoundingClientRect();
-            // Basic visibility check
-            if (rect.width === 0 || rect.height === 0) return;
+            // Skip zero-size elements
+            if (rect.width === 0 || rect.height === 0) continue;
 
             const area = rect.width * rect.height;
+
+            // Check visibility overlap with viewport
+            // Simple center-point check is usually sufficient and fast
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
-
-            // Check if center is in viewport
             const inViewport = (centerX >= 0 && centerX <= window.innerWidth && centerY >= 0 && centerY <= window.innerHeight);
 
-            if (area > maxArea && inViewport) {
+            // Favor in-viewport videos; if multiple, pick largest
+            if (inViewport && area > maxArea) {
                 maxArea = area;
                 bestCandidate = v;
             }
-        });
+        }
 
         return bestCandidate || videos[0];
     }
 
-    // --- Action Handlers ---
+    // --- Helper Functions ---
 
-    function playNextVideo(video) {
-        // Try to find a player wrapper first to scope the search
-        const wrapper = video.closest('.html5-video-player')
-            || video.closest('.player-container')
-            || video.closest('.video-wrapper')
-            || video.closest('.bilibili-player')
-            || video.closest('[data-testid="videoPlayer"]') // X
-            || document.body;
-
-        const selectors = [
-            '.ytp-next-button', // YouTube
-            '.bilibili-player-video-btn-next', '.squirtle-video-next', // Bilibili
-            '[data-e2e="xgplayer-next"]', // Douyin/XG
-            '[aria-label*="Next"]', '[aria-label*="下一集"]', '[aria-label*="下一个"]',
-            '[title*="Next"]', '[title*="下一集"]'
-        ];
-
-        for (const sel of selectors) {
-            const btn = wrapper.querySelector(sel);
-            if (btn && btn.offsetParent) { // Check visibility
-                simulateClick(btn);
-                showOSD('Playing Next', video);
-                return;
-            }
-        }
-        showOSD('Next button not found', video);
+    /**
+     * Simulate a mouse click on an element.
+     * Dispatches mousedown/mouseup events to satisfy frameworks (React, Vue) that listen to them.
+     */
+    function simulateClick(element) {
+        if (!element) return;
+        const outputWindow = element.ownerDocument.defaultView || window;
+        const opts = { bubbles: true, cancelable: true, view: outputWindow };
+        element.dispatchEvent(new MouseEvent('mousedown', opts));
+        element.dispatchEvent(new MouseEvent('mouseup', opts));
+        element.click();
     }
 
-    function playPrevVideo(video) {
-        const wrapper = video.closest('.html5-video-player')
-            || video.closest('.player-container')
-            || video.closest('.video-wrapper')
-            || video.closest('.bilibili-player')
-            || document.body;
+    /**
+     * Search for native player buttons using selectors or accessibility labels.
+     * Used for Next/Prev/Fullscreen actions.
+     * 
+     * @param {HTMLElement} wrapper - The container to search within.
+     * @param {string[]} selectors - CSS selectors for precise targeting.
+     * @param {string[]} keywords - Keywords to match against aria-label/title/text.
+     * @returns {HTMLElement|null}
+     */
+    function findControlBtn(wrapper, selectors, keywords) {
+        if (!wrapper) return null;
 
-        const selectors = [
-            '.ytp-prev-button', // YouTube
-            '[aria-label*="Previous"]', '[aria-label*="Prev"]', '[aria-label*="上一集"]', '[aria-label*="上一个"]',
-            '[title*="Previous"]', '[title*="Prev"]', '[title*="上一集"]'
-        ];
-
+        // 1. Precise Selector Match
         for (const sel of selectors) {
             const btn = wrapper.querySelector(sel);
-            if (btn && btn.offsetParent) {
-                simulateClick(btn);
-                showOSD('Playing Previous', video);
-                return;
+            if (btn && btn.offsetParent) return btn; // Must be visible
+        }
+
+        // 2. Fuzzy Keyword Match (Fallback)
+        if (keywords && keywords.length > 0) {
+            const elements = wrapper.querySelectorAll('button, [role="button"], div, span, i');
+            for (let i = 0; i < elements.length; i++) {
+                const el = elements[i];
+                // Skip invisible elements early
+                if (!el.offsetParent) continue;
+
+                const attrStr = (el.title || '') + (el.getAttribute('aria-label') || '') + (el.innerText || '');
+                const lowerAttr = attrStr.toLowerCase();
+
+                for (const key of keywords) {
+                    if (lowerAttr.includes(key)) return el;
+                }
             }
         }
-        showOSD('Previous button not found', video);
+        return null;
+    }
+
+    // --- Action Handlers ---
+
+    function clickControlBtn(video, actionType) {
+        const wrapper = getWrapper(video) || document.body;
+        let selectors = [];
+        let keywords = [];
+        let osdText = '';
+
+        if (actionType === 'next') {
+            selectors = ['.ytp-next-button', '.bilibili-player-video-btn-next', '.squirtle-video-next', '[data-e2e="xgplayer-next"]'];
+            keywords = ['next', '下一集', '下一个'];
+            osdText = 'Playing Next';
+        } else if (actionType === 'prev') {
+            selectors = ['.ytp-prev-button'];
+            keywords = ['previous', 'prev', '上一集', '上一个'];
+            osdText = 'Playing Previous';
+        }
+
+        const btn = findControlBtn(wrapper, selectors, keywords);
+        if (btn) {
+            simulateClick(btn);
+            showOSD(osdText, video);
+        } else {
+            showOSD(`${actionType === 'next' ? 'Next' : 'Previous'} button not found`, video);
+        }
     }
 
     function adjustSeek(video, delta) {
-        video.currentTime += delta;
+        if (Number.isFinite(video.duration)) {
+            video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + delta));
+        } else {
+            // For live streams or infinite buffers, just try setting it
+            video.currentTime += delta;
+        }
         showOSD(`${delta > 0 ? 'Forward' : 'Rewind'} ${Math.abs(delta)}s`, video);
     }
 
     function adjustVolume(video, delta) {
         let newVol = Math.min(1, Math.max(0, video.volume + delta));
         video.volume = newVol;
-        showOSD(`Volume ${Math.round(newVol * 100)}%`, video);
+        const volPercent = Math.round(newVol * 100);
+        showOSD(`Volume ${volPercent}%`, video);
     }
 
     function toggleMute(video) {
@@ -311,6 +374,7 @@
 
     function adjustSpeed(video, action) {
         if (action === 'reset') {
+            // Toggle between 1.0 and last used speed
             if (video.playbackRate === 1) {
                 video.playbackRate = lastSpeed === 1 ? config.speedStep + 1 : lastSpeed;
             } else {
@@ -324,14 +388,14 @@
         } else if (typeof action === 'number') {
             video.playbackRate = action;
         }
-        // Round to 1 decimal place to avoid floating point ugliness
+        // Round to 1 decimal place to prevent floating point errors (e.g. 1.10000002)
         video.playbackRate = Math.round(video.playbackRate * 10) / 10;
         showOSD(`Speed ${video.playbackRate}x`, video);
     }
 
     /**
-     * Applies transform styles (Rotate & Mirror).
-     * Calculates scale to fit rotated video within container.
+     * Apply CSS Transforms (Rotate & Mirror).
+     * Calculates the necessary scale factor to fit the rotated video within its container/viewport.
      */
     function applyTransform(video) {
         const rotate = video._rotateDeg || 0;
@@ -345,16 +409,16 @@
 
             if (vW && vH) {
                 let cW, cH;
-                // Use viewport size if in fullscreen
+                // Use viewport size if in fullscreen (Web or Native)
                 if (video._isWebFullscreen || document.fullscreenElement) {
                     cW = window.innerWidth;
                     cH = window.innerHeight;
                 } else {
-                    cW = vW; // Basic fallback to self-size if inline
+                    cW = vW; // Fallback to self-size
                     cH = vH;
                 }
 
-                // Fit Logic: when rotated, H becomes W.
+                // Fit Logic: when rotated, Video Height becomes visible Width, etc.
                 const scaleW = cW / vH;
                 const scaleH = cH / vW;
                 scale = Math.min(scaleW, scaleH);
@@ -380,22 +444,25 @@
     }
 
     /**
-     * Force "Web Fullscreen" (CSS-based).
-     * Useful when Native Fullscreen is blocked or undesired.
+     * Force "Web Fullscreen" Mode.
+     * This simulates fullscreen by setting fixed positioning and high z-index on the video.
+     * It also iterates up the DOM tree to nuke z-indexes/transforms of ancestors (Stacking Contexts).
      */
     function enableManualWebFullscreen(video) {
         webFullscreenStyleCache.clear();
 
-        // 1. Fix Video Element styling
+        // 1. Style Video Element
         video._prevStyle = video.style.cssText;
         video.style.cssText += 'position:fixed !important; top:0 !important; left:0 !important; width:100vw !important; height:100vh !important; z-index:2147483647 !important; background:black !important; object-fit:contain !important;';
 
-        applyTransform(video); // Re-apply transforms
+        applyTransform(video);
 
-        // 2. Iterate ancestors to fix Stacking Contexts and Z-Index
+        // 2. Fix Ancestor Stacking Contexts
+        // We must flatten layout contexts so the fixed video isn't clipped or obscured.
         let el = video.parentElement;
         while (el && el !== document.documentElement) {
             const style = window.getComputedStyle(el);
+            // Cache original styles
             webFullscreenStyleCache.set(el, {
                 transform: el.style.transform,
                 zIndex: el.style.zIndex,
@@ -405,15 +472,15 @@
                 willChange: el.style.willChange
             });
 
-            // Flatten stacking context creators
+            // Flatten properties that create stacking contexts
             if (style.transform !== 'none') el.style.setProperty('transform', 'none', 'important');
             if (style.filter !== 'none') el.style.setProperty('filter', 'none', 'important');
             if (style.perspective !== 'none') el.style.setProperty('perspective', 'none', 'important');
             if (style.backdropFilter !== 'none') el.style.setProperty('backdrop-filter', 'none', 'important');
             if (style.willChange !== 'auto') el.style.setProperty('will-change', 'auto', 'important');
             el.style.setProperty('contain', 'none', 'important');
-
             el.style.setProperty('z-index', '2147483647', 'important');
+
             if (style.position === 'static') {
                 el.style.setProperty('position', 'relative', 'important');
             }
@@ -431,14 +498,14 @@
 
         // Restore Ancestor Styles
         for (const [el, styles] of webFullscreenStyleCache) {
-            el.style.transform = styles.transform;
-            el.style.zIndex = styles.zIndex;
-            el.style.position = styles.position;
-            el.style.contain = styles.contain;
-            el.style.filter = styles.filter;
-            el.style.willChange = styles.willChange;
+            if (styles.transform) el.style.transform = styles.transform; else el.style.removeProperty('transform');
+            if (styles.zIndex) el.style.zIndex = styles.zIndex; else el.style.removeProperty('z-index');
+            if (styles.position) el.style.position = styles.position; else el.style.removeProperty('position');
+            if (styles.contain) el.style.contain = styles.contain; else el.style.removeProperty('contain');
+            if (styles.filter) el.style.filter = styles.filter; else el.style.removeProperty('filter');
+            if (styles.willChange) el.style.willChange = styles.willChange; else el.style.removeProperty('will-change');
         }
-        webFullscreenStyleCache.clear(); // Clear cache to prevent memory leaks
+        webFullscreenStyleCache.clear(); // Free memory
 
         applyTransform(video);
         video._isWebFullscreen = false;
@@ -446,53 +513,13 @@
     }
 
     /**
-     * Helper to simulate a real user click.
-     * Needed for frameworks (React/Vue) that track event history.
+     * Get the appropriate wrapper element for Fullscreen.
+     * Priority: 
+     * 1. Known Player Containers (YouTube, Bilibili, etc.)
+     * 2. Closest <section> (Robust fallback for generic sites like Hupu)
+     * 3. Direct Parent (Last resort)
      */
-    function simulateClick(element) {
-        if (!element) return;
-        const outputWindow = element.ownerDocument.defaultView || window;
-        const opts = { bubbles: true, cancelable: true, view: outputWindow };
-        element.dispatchEvent(new MouseEvent('mousedown', opts));
-        element.dispatchEvent(new MouseEvent('mouseup', opts));
-        element.click();
-    }
-
-    /**
-     * Fuzzy search for native buttons (Fallback).
-     */
-    function findNativeButton(root, keywords) {
-        if (!root) return null;
-        const candidates = [];
-        const elements = root.querySelectorAll('*');
-
-        for (let i = 0; i < elements.length; i++) {
-            const el = elements[i];
-            if (['SCRIPT', 'STYLE', 'LINK', 'META'].includes(el.tagName)) continue;
-
-            let score = 0;
-            const attrStr = (el.className || '') + (el.id || '') + (el.getAttribute('title') || '') + (el.getAttribute('aria-label') || '');
-            const lowerAttr = attrStr.toLowerCase();
-
-            for (const key of keywords) {
-                if (lowerAttr.includes(key)) {
-                    score += 10;
-                    if (el.tagName === 'BUTTON' || el.onclick || el.getAttribute('role') === 'button') score += 5;
-                }
-            }
-            if (score > 0) candidates.push({ el, score });
-        }
-        candidates.sort((a, b) => b.score - a.score);
-        return candidates.length > 0 ? candidates[0].el : null;
-    }
-
-    /**
-     * Main Fullscreen Toggle Logic.
-     * Handles complex site-specific behaviors (Bilibili, YouTube, Hupu, X, etc.)
-     */
-    function toggleFullscreen(video, mode) {
-        // Known Wrappers Map for Specific Sites
-        // These containers handle the player UI and layout correctly.
+    function getWrapper(v) {
         const KNOWN_WRAPPERS = [
             '.html5-video-player',       // YouTube / Generic
             '.player-container',         // Generic
@@ -503,52 +530,46 @@
             '[data-testid="videoPlayer"]'// X (Twitter)
         ];
 
-        // wrapper finding strategy
-        const getWrapper = (v) => {
-            for (const selector of KNOWN_WRAPPERS) {
-                const w = v.closest(selector);
-                if (w) return w;
-            }
-            // Fallback: Use parent section or direct parent.
-            // This allows OSD to be appended and transforms to work in native fullscreen.
-            const section = v.closest('section');
-            if (section) return section;
+        for (const selector of KNOWN_WRAPPERS) {
+            const w = v.closest(selector);
+            if (w) return w;
+        }
 
-            // Last resort: Use direct parent element.
-            // We never want to fullscreen the VIDEO directly because:
-            // 1. OSD cannot be shown on top of it.
-            // 2. CSS transforms are ignored by the browser's hardware-accelerated fullscreen path.
-            return v.parentElement || v;
-        };
+        // Fallback: Use parent section to ensure OSD visibility and Transform support
+        const section = v.closest('section');
+        if (section) return section;
 
+        return v.parentElement || v;
+    }
+
+    /**
+     * Main Fullscreen Toggle Logic.
+     */
+    function toggleFullscreen(video, mode) {
         const wrapper = getWrapper(video);
 
         if (mode === 'web') {
             if (video._isWebFullscreen) {
                 disableManualWebFullscreen(video);
             } else {
-                // Try finding Native "Web Fullscreen" buttons first
+                // Try finding Native "Web Fullscreen" / "Theatre Mode" buttons first
                 const webSelectors = [
-                    '.bilibili-player-video-btn-web-fullscreen', '.squirtle-video-pagefullscreen', // Bilibili
-                    '.ytp-size-button', // YouTube
-                    '[data-a-target="player-theatre-mode-button"]', // Twitch
-                    '.player-fullpage-btn', // Huya
-                    'xg-icon.xgplayer-page-full-screen', '[data-e2e="xgplayer-page-full-screen"]', // Douyin
-                    '[aria-label*="Web Fullscreen"]', '[aria-label*="网页全屏"]', '[aria-label*="Theater"]' // Generic
+                    '.bilibili-player-video-btn-web-fullscreen', '.squirtle-video-pagefullscreen',
+                    '.ytp-size-button',
+                    '[data-a-target="player-theatre-mode-button"]',
+                    '.player-fullpage-btn',
+                    'xg-icon.xgplayer-page-full-screen', '[data-e2e="xgplayer-page-full-screen"]'
                 ];
+                // Keywords for fuzzy matching
+                const webKeywords = ['web fullscreen', '网页全屏', 'theater', '宽屏'];
 
-                let btnClicked = false;
-                for (const sel of webSelectors) {
-                    const btn = document.querySelector(sel); // Global search is safer for Web FS
-                    if (btn && btn.offsetParent) {
-                        simulateClick(btn);
-                        btnClicked = true;
-                        showOSD('Web Fullscreen (Native)', video);
-                        break;
-                    }
+                const btn = findControlBtn(document, webSelectors, webKeywords); // Search global because web fs buttons might be outside wrapper
+                if (btn) {
+                    simulateClick(btn);
+                    showOSD('Web Fullscreen (Native)', video);
+                } else {
+                    enableManualWebFullscreen(video);
                 }
-
-                if (!btnClicked) enableManualWebFullscreen(video);
             }
         } else {
             // Native Fullscreen
@@ -556,58 +577,39 @@
                 if (document.exitFullscreen) document.exitFullscreen();
                 showOSD('Exit Fullscreen', video);
             } else {
-                let btnClicked = false;
-
                 // 1. Try Known Native Buttons
                 const nativeSelectors = [
-                    '.ytp-fullscreen-button', // YouTube
-                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', // Bilibili
-                    '[data-a-target="player-fullscreen-button"]', // Twitch
-                    '.player-fullscreen-btn', // Huya
-                    '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]', // Douyin
-                    '.vjs-fullscreen-control', // VideoJS
-                    '[data-testid="videoPlayer"] [aria-label="全屏"]', '[data-testid="videoPlayer"] [aria-label="Fullscreen"]' // X
+                    '.ytp-fullscreen-button',
+                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen',
+                    '[data-a-target="player-fullscreen-button"]',
+                    '.player-fullscreen-btn',
+                    '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]',
+                    '.vjs-fullscreen-control',
+                    '[data-testid="videoPlayer"] [aria-label="全屏"]', '[data-testid="videoPlayer"] [aria-label="Fullscreen"]'
                 ];
+                const nativeKeywords = ['fullscreen', '全屏', 'full-screen'];
 
                 const searchRoot = (wrapper === video) ? document : wrapper;
+                const btn = findControlBtn(searchRoot, nativeSelectors, nativeKeywords);
 
-                for (const sel of nativeSelectors) {
-                    const btn = searchRoot.querySelector(sel);
-                    if (btn && btn.offsetParent) {
-                        simulateClick(btn);
-                        btnClicked = true;
-                        break;
-                    }
-                }
-
-                // 2. Fuzzy Search Fallback
-                if (!btnClicked && wrapper !== video) {
-                    const fuzzyBtn = findNativeButton(wrapper, ['fullscreen', '全屏', 'full-screen']);
-                    if (fuzzyBtn) {
-                        simulateClick(fuzzyBtn);
-                        btnClicked = true;
-                    }
-                }
-
-                // 3. Double Click Fallback (Whitelist)
-                if (!btnClicked) {
+                if (btn) {
+                    simulateClick(btn);
+                } else {
+                    // 2. Double Click Fallback (Whitelist)
                     const host = window.location.hostname;
                     const whitelist = ['bilibili.com', 'youtube.com', 'twitch.tv'];
                     if (whitelist.some(site => host.includes(site))) {
                         video.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
                         showOSD('Try Double-Click', video);
+                    } else {
+                        // 3. API Force Fallback
+                        const target = wrapper || video;
+                        if (target.requestFullscreen) target.requestFullscreen();
+                        else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
+                        else if (video.requestFullscreen) video.requestFullscreen();
+
+                        showOSD('Fullscreen (API)', video);
                     }
-                }
-
-                // 4. API Force Fallback
-                if (!btnClicked) {
-                    // If wrapper is valid (known player), use it. Else use video.
-                    const target = wrapper || video;
-                    if (target.requestFullscreen) target.requestFullscreen();
-                    else if (target.webkitRequestFullscreen) target.webkitRequestFullscreen();
-                    else if (video.requestFullscreen) video.requestFullscreen();
-
-                    showOSD('Fullscreen (API)', video);
                 }
             }
         }
@@ -648,26 +650,23 @@
 
         const inputs = [];
 
-        // Conflict Checking Logic (Only active when Settings UI is open)
+        // Conflict Checking Logic (Allocated only when UI is open)
         const checkConflicts = () => {
             const keyMap = new Map();
             const conflicts = new Set();
 
-            // 1. Map keys to inputs
             inputs.forEach(input => {
                 const k = input.value.toLowerCase();
                 if (!keyMap.has(k)) keyMap.set(k, []);
                 keyMap.get(k).push(input);
             });
 
-            // 2. Identify conflicts
             for (const [k, list] of keyMap) {
                 if (list.length > 1) {
                     list.forEach(input => conflicts.add(input));
                 }
             }
 
-            // 3. Update UI
             inputs.forEach(input => {
                 if (conflicts.has(input)) {
                     input.style.border = '1px solid #ff4444';
@@ -684,7 +683,7 @@
         };
 
         Object.entries(descriptions).forEach(([key, desc]) => {
-            if (!config.keys[key] && key.startsWith('speed')) return; // Skip extra speed keys if not in config
+            // Skip config keys irrelevant to UI if any
 
             const label = document.createElement('label');
             label.textContent = desc;
@@ -719,9 +718,10 @@
 
         container.appendChild(form);
 
-        // Initial conflict check
+        // Initial check
         checkConflicts();
 
+        // Footer Buttons
         const btnRow = document.createElement('div');
         btnRow.style.marginTop = '20px';
         btnRow.style.textAlign = 'right';
@@ -743,7 +743,6 @@
             const hasConflict = checkConflicts();
             if (hasConflict) {
                 msgSpan.textContent = 'Cannot save: Resolve conflicts first';
-                // Shake animation?
                 container.animate([
                     { transform: 'translate(-50%, -50%) translateX(0)' },
                     { transform: 'translate(-50%, -50%) translateX(-5px)' },
@@ -771,19 +770,18 @@
         btnRow.appendChild(btns);
 
         container.appendChild(btnRow);
-
         document.body.appendChild(container);
     }
 
-    // --- Keyboard Event Listener ---
+    // --- Global Keyboard Event Listener ---
     document.addEventListener('keydown', (e) => {
-        // Ignore inputs (except Escape sometimes, but here generally ignore)
+        // Prevent triggering controls when typing in input fields
         const tag = document.activeElement.tagName;
         if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag) || document.activeElement.isContentEditable) {
             return;
         }
 
-        // Modifiers
+        // Build Key String
         let keyStr = '';
         if (e.shiftKey) keyStr += 'Shift+';
         if (e.ctrlKey) keyStr += 'Ctrl+';
@@ -792,23 +790,24 @@
 
         let k = e.key;
         if (k === ' ') k = 'Space';
-        // Normalize single chars to lowercase
-        if (k.length === 1) k = k.toLowerCase();
+        if (k.length === 1) k = k.toLowerCase(); // Case insensitive for single letters
 
         keyStr += k;
 
-        // Map key to action
-        const action = Object.entries(config.keys).find(([k, v]) => v.toLowerCase() === keyStr.toLowerCase());
+        // Match Key to Action
+        // Use loop to find action since config.keys is an object
+        const actionEntry = Object.entries(config.keys).find(([_, val]) => val.toLowerCase() === keyStr.toLowerCase());
 
-        if (action) {
+        if (actionEntry) {
             const video = getActiveVideo();
             if (!video) return;
 
+            // Stop browser default handling for these shortcuts
             e.preventDefault();
             e.stopPropagation();
 
-            const act = action[0];
-            switch (act) {
+            const action = actionEntry[0];
+            switch (action) {
                 case 'seekForward': adjustSeek(video, config.seekSmall); break;
                 case 'seekBackward': adjustSeek(video, -config.seekSmall); break;
                 case 'seekForwardLarge': adjustSeek(video, config.seekLarge); break;
@@ -824,18 +823,18 @@
                 case 'speed1': adjustSpeed(video, 1.0); break;
                 case 'speed2': adjustSpeed(video, 2.0); break;
                 case 'speed3': adjustSpeed(video, 3.0); break;
-                case 'speed4': adjustSpeed(video, 4.0); break; // Experimental
+                case 'speed4': adjustSpeed(video, 4.0); break;
                 case 'fullscreen': toggleFullscreen(video, 'native'); break;
                 case 'webFullscreen': toggleFullscreen(video, 'web'); break;
                 case 'rotate': rotateVideo(video); break;
                 case 'mirror': toggleMirror(video); break;
-                case 'nextVideo': playNextVideo(video); break;
-                case 'prevVideo': playPrevVideo(video); break;
+                case 'nextVideo': clickControlBtn(video, 'next'); break;
+                case 'prevVideo': clickControlBtn(video, 'prev'); break;
             }
         }
-    }, { capture: true }); // Capture phase to override site defaults
+    }, { capture: true }); // Capture phase to override site events
 
-    // --- Register Menu Command ---
+    // Register Menu
     GM_registerMenuCommand('Settings', createSettingsUI);
 
 })();
