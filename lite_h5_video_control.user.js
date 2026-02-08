@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      3.35
+// @version      3.36
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
