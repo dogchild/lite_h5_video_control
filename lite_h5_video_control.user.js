@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.26
+// @version      3.33
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -41,7 +41,9 @@
             speed3: '3',
             speed4: '4',
             fullscreen: 'Enter',
-            webFullscreen: 'Shift+Enter'
+            webFullscreen: 'Shift+Enter',
+            nextVideo: 'Shift+n',
+            prevVideo: 'Shift+p'
         }
     };
 
@@ -71,36 +73,51 @@
      */
     const style = document.createElement('style');
     style.textContent = `
-        /* Generic fix: When video element itself is fullscreen, force it to fill screen */
-        video:fullscreen, video:-webkit-full-screen {
+        /* When a container (section, div) is fullscreened, ensure it and its video fill the screen */
+        :fullscreen {
             width: 100vw !important;
             height: 100vh !important;
             max-width: 100vw !important;
             max-height: 100vh !important;
             margin: 0 !important;
             padding: 0 !important;
-            border: 0 !important;
-            display: block !important; /* Critical for wrapping issues */
+            background: black !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            position: relative !important;
+        }
+        :fullscreen > video {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
             object-fit: contain !important;
-            background-color: black !important;
+            background: black !important;
+        }
+        /* Fallback for when video element itself is fullscreen (shouldn't happen after this fix) */
+        video:fullscreen, video:-webkit-full-screen {
+            width: 100vw !important;
+            height: 100vh !important;
+            object-fit: contain !important;
+            background: black !important;
         }
     `;
     (document.head || document.documentElement).appendChild(style);
 
     /**
      * Show On-Screen Display (OSD) notification.
-     * @param {string} text - The message to display.
-     * @param {HTMLVideoElement} [video] - The video element to anchor OSD to (optional).
+     * Mounts OSD inside fullscreenElement when in native fullscreen to ensure visibility.
      */
     function showOSD(text, video) {
         let osd = document.getElementById('lite-video-osd');
 
-        // Lazy creation of OSD element
+        // Lazy creation
         if (!osd) {
             osd = document.createElement('div');
             osd.id = 'lite-video-osd';
             osd.style.cssText = `
-                position: fixed;
+                position: absolute;
                 background: rgba(0, 0, 0, 0.7);
                 color: white;
                 padding: 10px 20px;
@@ -113,37 +130,35 @@
                 opacity: 0;
                 text-shadow: 1px 1px 2px black;
                 white-space: nowrap;
+                top: 20px;
+                left: 20px;
             `;
         }
 
-        // Determine correct mount point based on Fullscreen state
+        // Determine correct mount point
         let mountPoint = document.body;
         if (document.fullscreenElement) {
-            // If strictly the video is fullscreen, we can't append children to it. 
-            // We append to body (it will show over video due to high z-index).
-            if (document.fullscreenElement.tagName !== 'VIDEO') {
-                mountPoint = document.fullscreenElement;
+            // In native fullscreen, OSD must be INSIDE the fullscreen container to be visible.
+            mountPoint = document.fullscreenElement;
+            osd.style.position = 'absolute'; // Absolute within the fullscreen container
+            osd.style.top = '20px';
+            osd.style.left = '20px';
+        } else {
+            osd.style.position = 'fixed'; // Fixed relative to viewport
+            // Position relative to video if available
+            if (video) {
+                const rect = video.getBoundingClientRect();
+                osd.style.top = Math.max(0, rect.top + 20) + 'px';
+                osd.style.left = Math.max(0, rect.left + 20) + 'px';
+            } else {
+                osd.style.top = '20px';
+                osd.style.left = '20px';
             }
         }
 
-        if (osd.parentNode !== mountPoint) mountPoint.appendChild(osd);
-
-        // Positioning logic
-        if (video && !document.fullscreenElement) {
-            const rect = video.getBoundingClientRect();
-            // In native fullscreen, usually top:20, left:20 relative to viewport is safest
-            if (document.fullscreenElement) {
-                osd.style.top = '20px';
-                osd.style.left = '20px';
-            } else {
-                const top = Math.max(0, rect.top + 20);
-                const left = Math.max(0, rect.left + 20);
-                osd.style.top = top + 'px';
-                osd.style.left = left + 'px';
-            }
-        } else {
-            osd.style.top = '20px';
-            osd.style.left = '20px';
+        // Move OSD to correct mount point if needed
+        if (osd.parentNode !== mountPoint) {
+            mountPoint.appendChild(osd);
         }
 
         osd.textContent = text;
@@ -224,6 +239,58 @@
     }
 
     // --- Action Handlers ---
+
+    function playNextVideo(video) {
+        // Try to find a player wrapper first to scope the search
+        const wrapper = video.closest('.html5-video-player')
+            || video.closest('.player-container')
+            || video.closest('.video-wrapper')
+            || video.closest('.bilibili-player')
+            || video.closest('[data-testid="videoPlayer"]') // X
+            || document.body;
+
+        const selectors = [
+            '.ytp-next-button', // YouTube
+            '.bilibili-player-video-btn-next', '.squirtle-video-next', // Bilibili
+            '[data-e2e="xgplayer-next"]', // Douyin/XG
+            '[aria-label*="Next"]', '[aria-label*="下一集"]', '[aria-label*="下一个"]',
+            '[title*="Next"]', '[title*="下一集"]'
+        ];
+
+        for (const sel of selectors) {
+            const btn = wrapper.querySelector(sel);
+            if (btn && btn.offsetParent) { // Check visibility
+                simulateClick(btn);
+                showOSD('Playing Next', video);
+                return;
+            }
+        }
+        showOSD('Next button not found', video);
+    }
+
+    function playPrevVideo(video) {
+        const wrapper = video.closest('.html5-video-player')
+            || video.closest('.player-container')
+            || video.closest('.video-wrapper')
+            || video.closest('.bilibili-player')
+            || document.body;
+
+        const selectors = [
+            '.ytp-prev-button', // YouTube
+            '[aria-label*="Previous"]', '[aria-label*="Prev"]', '[aria-label*="上一集"]', '[aria-label*="上一个"]',
+            '[title*="Previous"]', '[title*="Prev"]', '[title*="上一集"]'
+        ];
+
+        for (const sel of selectors) {
+            const btn = wrapper.querySelector(sel);
+            if (btn && btn.offsetParent) {
+                simulateClick(btn);
+                showOSD('Playing Previous', video);
+                return;
+            }
+        }
+        showOSD('Previous button not found', video);
+    }
 
     function adjustSeek(video, delta) {
         video.currentTime += delta;
@@ -442,9 +509,16 @@
                 const w = v.closest(selector);
                 if (w) return w;
             }
-            // Fallback: If no known wrapper, return VIDEO itself.
-            // Returning parentElement is risky on generic sites (like Hupu) due to fixed dimensions.
-            return v;
+            // Fallback: Use parent section or direct parent.
+            // This allows OSD to be appended and transforms to work in native fullscreen.
+            const section = v.closest('section');
+            if (section) return section;
+
+            // Last resort: Use direct parent element.
+            // We never want to fullscreen the VIDEO directly because:
+            // 1. OSD cannot be shown on top of it.
+            // 2. CSS transforms are ignored by the browser's hardware-accelerated fullscreen path.
+            return v.parentElement || v;
         };
 
         const wrapper = getWrapper(video);
@@ -549,7 +623,7 @@
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: #222; color: #eee; padding: 20px; border-radius: 8px;
             z-index: 2147483647; box-shadow: 0 0 15px rgba(0,0,0,0.5);
-            font-family: sans-serif; min-width: 400px; max-height: 80vh; overflow-y: auto;
+            font-family: sans-serif; min-width: 500px; max-height: 80vh; overflow-y: auto;
         `;
 
         const title = document.createElement('h3');
@@ -567,18 +641,58 @@
             volUpLarge: 'Volume Up (Large)', volDownLarge: 'Volume Down (Large)',
             mute: 'Toggle Mute', mirror: 'Toggle Mirror', rotate: 'Rotate 90°',
             speedUp: 'Speed Up', speedDown: 'Speed Down', speedReset: 'Reset Speed',
-            fullscreen: 'Native Fullscreen', webFullscreen: 'Web Fullscreen'
+            fullscreen: 'Native Fullscreen', webFullscreen: 'Web Fullscreen',
+            nextVideo: 'Next Video', prevVideo: 'Previous Video',
+            speed1: 'Speed 1x', speed2: 'Speed 2x', speed3: 'Speed 3x', speed4: 'Speed 4x'
         };
 
-        // UI Building Logic Omitted for brevity, assumed stable
-        // (Just restoring basic input creation for this function)
+        const inputs = [];
+
+        // Conflict Checking Logic (Only active when Settings UI is open)
+        const checkConflicts = () => {
+            const keyMap = new Map();
+            const conflicts = new Set();
+
+            // 1. Map keys to inputs
+            inputs.forEach(input => {
+                const k = input.value.toLowerCase();
+                if (!keyMap.has(k)) keyMap.set(k, []);
+                keyMap.get(k).push(input);
+            });
+
+            // 2. Identify conflicts
+            for (const [k, list] of keyMap) {
+                if (list.length > 1) {
+                    list.forEach(input => conflicts.add(input));
+                }
+            }
+
+            // 3. Update UI
+            inputs.forEach(input => {
+                if (conflicts.has(input)) {
+                    input.style.border = '1px solid #ff4444';
+                    input.style.backgroundColor = '#3e1111';
+                    input.title = 'Conflict detected!';
+                } else {
+                    input.style.border = '1px solid #555';
+                    input.style.backgroundColor = '#333';
+                    input.title = '';
+                }
+            });
+
+            return conflicts.size > 0;
+        };
+
         Object.entries(descriptions).forEach(([key, desc]) => {
+            if (!config.keys[key] && key.startsWith('speed')) return; // Skip extra speed keys if not in config
+
             const label = document.createElement('label');
             label.textContent = desc;
             const input = document.createElement('input');
             input.type = 'text';
-            input.value = config.keys[key];
-            input.style.cssText = 'width: 100%; background: #333; color: white; border: 1px solid #555; padding: 5px;';
+            input.value = config.keys[key] || '';
+            input.style.cssText = 'width: 100%; background: #333; color: white; border: 1px solid #555; padding: 5px; box-sizing: border-box;';
+            input.dataset.key = key;
 
             input.addEventListener('keydown', (e) => {
                 e.preventDefault();
@@ -589,30 +703,56 @@
                 let k = e.key;
                 if (k === ' ') k = 'Space';
                 if (['Shift', 'Control', 'Alt'].includes(k)) return;
+
                 keyStr += k.length === 1 ? k.toLowerCase() : k;
                 input.value = keyStr;
+
+                checkConflicts();
             });
 
             const div = document.createElement('div');
             div.appendChild(label);
             div.appendChild(input);
             form.appendChild(div);
-
-            // Bind save on input change? No, explicit save button
-            input.dataset.key = key;
+            inputs.push(input);
         });
 
         container.appendChild(form);
 
+        // Initial conflict check
+        checkConflicts();
+
         const btnRow = document.createElement('div');
         btnRow.style.marginTop = '20px';
         btnRow.style.textAlign = 'right';
+        btnRow.style.display = 'flex';
+        btnRow.style.justifyContent = 'space-between';
+        btnRow.style.alignItems = 'center';
+
+        const msgSpan = document.createElement('span');
+        msgSpan.style.color = '#ff4444';
+        msgSpan.style.fontSize = '12px';
+        btnRow.appendChild(msgSpan);
+
+        const btns = document.createElement('div');
 
         const saveBtn = document.createElement('button');
         saveBtn.textContent = 'Save';
-        saveBtn.style.cssText = 'padding: 8px 16px; background: #4CAF50; color: white; border: none; cursor: pointer;';
+        saveBtn.style.cssText = 'padding: 8px 16px; background: #4CAF50; color: white; border: none; cursor: pointer; border-radius: 4px;';
         saveBtn.onclick = () => {
-            const inputs = form.querySelectorAll('input');
+            const hasConflict = checkConflicts();
+            if (hasConflict) {
+                msgSpan.textContent = 'Cannot save: Resolve conflicts first';
+                // Shake animation?
+                container.animate([
+                    { transform: 'translate(-50%, -50%) translateX(0)' },
+                    { transform: 'translate(-50%, -50%) translateX(-5px)' },
+                    { transform: 'translate(-50%, -50%) translateX(5px)' },
+                    { transform: 'translate(-50%, -50%) translateX(0)' }
+                ], { duration: 200 });
+                return;
+            }
+
             const newKeys = { ...config.keys };
             inputs.forEach(i => newKeys[i.dataset.key] = i.value);
             config.keys = newKeys;
@@ -623,11 +763,13 @@
 
         const cancelBtn = document.createElement('button');
         cancelBtn.textContent = 'Cancel';
-        cancelBtn.style.cssText = 'padding: 8px 16px; background: #666; color: white; border: none; margin-right: 10px; cursor: pointer;';
+        cancelBtn.style.cssText = 'padding: 8px 16px; background: #666; color: white; border: none; margin-right: 10px; cursor: pointer; border-radius: 4px;';
         cancelBtn.onclick = () => document.body.removeChild(container);
 
-        btnRow.appendChild(cancelBtn);
-        btnRow.appendChild(saveBtn);
+        btns.appendChild(cancelBtn);
+        btns.appendChild(saveBtn);
+        btnRow.appendChild(btns);
+
         container.appendChild(btnRow);
 
         document.body.appendChild(container);
@@ -687,6 +829,8 @@
                 case 'webFullscreen': toggleFullscreen(video, 'web'); break;
                 case 'rotate': rotateVideo(video); break;
                 case 'mirror': toggleMirror(video); break;
+                case 'nextVideo': playNextVideo(video); break;
+                case 'prevVideo': playPrevVideo(video); break;
             }
         }
     }, { capture: true }); // Capture phase to override site defaults
