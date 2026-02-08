@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Lite Video Control
 // @namespace    http://tampermonkey.net/
-// @version      3.21
+// @version      3.24
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @author       Antigravity
 // @match        *://*/*
@@ -92,20 +92,6 @@
             max-height: 100vh !important;
             margin: 0 !important;
             display: block !important;
-        }
-
-        /* NEW: Force specific known wrappers to be full size when fullscreened */
-        :fullscreen.art-video-player, :fullscreen.dplayer, :fullscreen.bilibili-player-video-wrap, :fullscreen section, :fullscreen div {
-            width: 100vw !important;
-            height: 100vh !important;
-            max-width: 100vw !important;
-            max-height: 100vh !important;
-            background-color: black !important;
-            margin: 0 !important;
-            padding: 0 !important;
-            display: flex !important; /* Ensure child video can fill it */
-            align-items: center !important;
-            justify-content: center !important;
         }
     `;
     (document.head || document.documentElement).appendChild(style);
@@ -563,7 +549,8 @@
                     '[data-a-target="player-fullscreen-button"]', // Twitch
                     '.player-fullscreen-btn', // Huya
                     '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]', // Douyin
-                    '.vjs-fullscreen-control' // VideoJS
+                    '.vjs-fullscreen-control', // VideoJS
+                    '[data-testid="videoPlayer"] [aria-label="全屏"]', '[data-testid="videoPlayer"] [aria-label="Fullscreen"]' // X (Twitter)
                 ];
 
                 for (const selector of nativeBtns) {
@@ -592,7 +579,7 @@
                     const isBilibili = host.includes('bilibili.com');
                     const isYouTube = host.includes('youtube.com');
 
-                    if (isBilibili || isYouTube) {
+                    if (isBilibili || isYouTube || host.includes('twitch.tv')) {
                         // Start of the fallback chain
                         // Dispatch a double click event on the video content
                         const outputWindow = video.ownerDocument.defaultView || window;
