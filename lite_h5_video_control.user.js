@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      4.0.1
+// @version      4.0.2
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
@@ -158,6 +158,72 @@
         }
     }
     if (configChanged) GM_setValue('lite_video_config', config);
+
+    // --- Site-Specific Constants & Selectors ---
+    const SITE_CONFIG = {
+        // Wrapper: The container element that should be fullscreened
+        wrappers: [
+            '.bpx-player-container',     // Bilibili (New)
+            '.html5-video-player',       // YouTube / Generic
+            '.player-container',         // Generic
+            '.video-wrapper',            // Generic
+            '.art-video-player',         // ArtPlayer
+            '.bilibili-player',          // Bilibili (Old)
+            'xg-video-container',        // Douyin / XGPlayer
+            '[data-testid="videoPlayer"]'// X (Twitter)
+        ],
+        // Native Fullscreen Buttons
+        fullscreen: {
+            selectors: [
+                '.ytp-fullscreen-button',               // YouTube
+                '.bpx-player-ctrl-full',                // Bilibili (New)
+                '.bilibili-player-video-btn-fullscreen',// Bilibili (Old)
+                '.squirtle-video-fullscreen',           // Bilibili (Old)
+                '.art-control-fullscreen',              // ArtPlayer
+                '.wbpv-fullscreen-control',             // Weibo
+                '[data-a-target="player-fullscreen-button"]', // Twitch
+                '.player-fullscreen-btn',               // Generic
+                '.xgplayer-fullscreen',                 // XGPlayer
+                '[data-e2e="xgplayer-fullscreen"]',     // XGPlayer
+                '.vjs-fullscreen-control',              // VideoJS
+                '[data-testid="videoPlayer"] [aria-label="全屏"]', // X
+                '[data-testid="videoPlayer"] [aria-label="Fullscreen"]' // X
+            ],
+            keywords: ['fullscreen', '全屏', 'full-screen'],
+            // Exclude these if found in fuzzy match to avoid False Positives (e.g. "Web Fullscreen")
+            exclude: ['web', '网页', 'page', 'theater', 'wide', '宽屏']
+        },
+        // Web Fullscreen / Theatre Mode Buttons
+        webFullscreen: {
+            selectors: [
+                '.bpx-player-ctrl-web',                 // Bilibili (New)
+                '.bilibili-player-video-btn-web-fullscreen', // Bilibili (Old)
+                '.squirtle-video-pagefullscreen',       // Bilibili (Old)
+                '.ytp-size-button',                     // YouTube (Theater)
+                '[data-a-target="player-theatre-mode-button"]', // Twitch
+                '.player-fullpage-btn',                 // Generic
+                'xg-icon.xgplayer-page-full-screen',    // XGPlayer
+                '[data-e2e="xgplayer-page-full-screen"]'// XGPlayer
+            ],
+            keywords: ['web fullscreen', '网页全屏', 'theater']
+        },
+        // Next/Prev Buttons
+        next: {
+            selectors: [
+                '.ytp-next-button',                 // YouTube
+                '.bilibili-player-video-btn-next',  // Bilibili
+                '.squirtle-video-next',             // Bilibili
+                '[data-e2e="xgplayer-next"]'        // XGPlayer
+            ],
+            keywords: ['next', '下一集', '下一个']
+        },
+        prev: {
+            selectors: ['.ytp-prev-button'],    // YouTube
+            keywords: ['previous', 'prev', '上一集', '上一个']
+        },
+        // Sites where Double-Click Fullscreen should be tried if button not found
+        dblClickWhitelist: ['bilibili.com', 'youtube.com', 'twitch.tv']
+    };
 
     // --- Runtime State ---
     let lastSpeed = 1.0;
@@ -446,12 +512,12 @@
         let osdText = '';
 
         if (actionType === 'next') {
-            selectors = ['.ytp-next-button', '.bilibili-player-video-btn-next', '.squirtle-video-next', '[data-e2e="xgplayer-next"]'];
-            keywords = ['next', '下一集', '下一个'];
+            selectors = SITE_CONFIG.next.selectors;
+            keywords = SITE_CONFIG.next.keywords;
             osdText = T.next;
         } else if (actionType === 'prev') {
-            selectors = ['.ytp-prev-button'];
-            keywords = ['previous', 'prev', '上一集', '上一个'];
+            selectors = SITE_CONFIG.prev.selectors;
+            keywords = SITE_CONFIG.prev.keywords;
             osdText = T.prev;
         }
 
@@ -635,18 +701,7 @@
      * 3. Direct Parent (Last resort)
      */
     function getWrapper(v) {
-        const KNOWN_WRAPPERS = [
-            '.bpx-player-container',     // Bilibili (New)
-            '.html5-video-player',       // YouTube / Generic
-            '.player-container',         // Generic
-            '.video-wrapper',            // Generic
-            '.art-video-player',         // ArtPlayer
-            '.bilibili-player',          // Bilibili (Old)
-            'xg-video-container',        // Douyin / XGPlayer
-            '[data-testid="videoPlayer"]'// X (Twitter)
-        ];
-
-        for (const selector of KNOWN_WRAPPERS) {
+        for (const selector of SITE_CONFIG.wrappers) {
             const w = v.closest(selector);
             if (w) return w;
         }
@@ -669,17 +724,7 @@
                 disableManualWebFullscreen(video);
             } else {
                 // Try finding Native "Web Fullscreen" / "Theatre Mode" buttons first
-                const webSelectors = [
-                    '.bilibili-player-video-btn-web-fullscreen', '.squirtle-video-pagefullscreen', '.bpx-player-ctrl-web',
-                    '.ytp-size-button',
-                    '[data-a-target="player-theatre-mode-button"]',
-                    '.player-fullpage-btn',
-                    'xg-icon.xgplayer-page-full-screen', '[data-e2e="xgplayer-page-full-screen"]'
-                ];
-                // Keywords for fuzzy matching
-                const webKeywords = ['web fullscreen', '网页全屏', 'theater'];
-
-                const btn = findControlBtn(document, webSelectors, webKeywords); // Search global because web fs buttons might be outside wrapper
+                const btn = findControlBtn(document, SITE_CONFIG.webFullscreen.selectors, SITE_CONFIG.webFullscreen.keywords); // Search global because web fs buttons might be outside wrapper
                 if (btn) {
                     simulateClick(btn);
                     showOSD(T.webFSNative, video);
@@ -696,23 +741,8 @@
                 video.focus(); // Restore focus to video (Fixes Hupu/Generic sites losing focus after exit)
             } else {
                 // 1. Try Known Native Buttons
-                const nativeSelectors = [
-                    '.ytp-fullscreen-button',
-                    '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', '.bpx-player-ctrl-full',
-                    '.art-control-fullscreen', // ArtPlayer Native Fullscreen
-                    '.wbpv-fullscreen-control', // Weibo Native Fullscreen
-                    '[data-a-target="player-fullscreen-button"]',
-                    '.player-fullscreen-btn',
-                    '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]',
-                    '.vjs-fullscreen-control',
-                    '[data-testid="videoPlayer"] [aria-label="全屏"]', '[data-testid="videoPlayer"] [aria-label="Fullscreen"]'
-                ];
-                const nativeKeywords = ['fullscreen', '全屏', 'full-screen'];
-                // Exclude "Web/Page" keywords when searching for Native Fullscreen to avoid false positives (like ArtPlayer's '网页全屏')
-                const excludeKeywords = ['web', '网页', 'page', 'theater', 'wide', '宽屏'];
-
                 const searchRoot = (wrapper === video) ? document : wrapper;
-                const btn = findControlBtn(searchRoot, nativeSelectors, nativeKeywords, excludeKeywords);
+                const btn = findControlBtn(searchRoot, SITE_CONFIG.fullscreen.selectors, SITE_CONFIG.fullscreen.keywords, SITE_CONFIG.fullscreen.exclude);
 
                 if (btn) {
                     simulateClick(btn);
@@ -720,8 +750,7 @@
                 } else {
                     // 2. Double Click Fallback (Whitelist)
                     const host = window.location.hostname;
-                    const whitelist = ['bilibili.com', 'youtube.com', 'twitch.tv'];
-                    if (whitelist.some(site => host.includes(site))) {
+                    if (SITE_CONFIG.dblClickWhitelist.some(site => host.includes(site))) {
                         video.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
                         showOSD(T.tryDblClick, video);
                     } else {
