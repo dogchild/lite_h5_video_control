@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      3.39
+// @version      4.0.1
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
@@ -330,33 +330,49 @@
         const videos = getAllVideos();
         if (videos.length === 0) return null;
 
-        // Optimization: Plays state check is much cheaper than layout geometry.
-        // readyState > 2 means HAVE_CURRENT_DATA or HAVE_ENOUGH_DATA (actually playable).
-        const playing = videos.find(v => !v.paused && v.style.display !== 'none' && v.readyState > 2);
-        if (playing) return playing;
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const center_x = viewportWidth / 2;
+        const center_y = viewportHeight / 2;
 
         let bestCandidate = null;
-        let maxArea = 0;
-        const viewportArea = window.innerWidth * window.innerHeight;
+        let minDistance = Infinity;
 
-        // Geometry check: Find largest video currently in viewport
+        // Priority 1: Playing videos closest to center
+        const playingVideos = videos.filter(v => !v.paused && v.style.display !== 'none' && v.readyState > 2);
+
+        if (playingVideos.length > 0) {
+            for (const v of playingVideos) {
+                const rect = v.getBoundingClientRect();
+                const v_center_x = rect.left + rect.width / 2;
+                const v_center_y = rect.top + rect.height / 2;
+                // Check if roughly in viewport
+                if (v_center_x > 0 && v_center_x < viewportWidth && v_center_y > 0 && v_center_y < viewportHeight) {
+                    const distance = Math.hypot(v_center_x - center_x, v_center_y - center_y);
+                    if (distance < minDistance) {
+                        minDistance = distance;
+                        bestCandidate = v;
+                    }
+                }
+            }
+            if (bestCandidate) return bestCandidate;
+        }
+
+        // Priority 2: Largest visible video in viewport (Fallback)
+        let maxArea = 0;
+        bestCandidate = null; // Reset bestCandidate for this priority
         for (let i = 0; i < videos.length; i++) {
             const v = videos[i];
             if (v.style.display === 'none') continue;
-
             const rect = v.getBoundingClientRect();
-            // Skip zero-size elements
             if (rect.width === 0 || rect.height === 0) continue;
 
             const area = rect.width * rect.height;
-
-            // Check visibility overlap with viewport
-            // Simple center-point check is usually sufficient and fast
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
-            const inViewport = (centerX >= 0 && centerX <= window.innerWidth && centerY >= 0 && centerY <= window.innerHeight);
 
-            // Favor in-viewport videos; if multiple, pick largest
+            const inViewport = (centerX >= 0 && centerX <= viewportWidth && centerY >= 0 && centerY <= viewportHeight);
+
             if (inViewport && area > maxArea) {
                 maxArea = area;
                 bestCandidate = v;
@@ -390,7 +406,7 @@
      * @param {string[]} keywords - Keywords to match against aria-label/title/text.
      * @returns {HTMLElement|null}
      */
-    function findControlBtn(wrapper, selectors, keywords) {
+    function findControlBtn(wrapper, selectors, keywords, excludeKeywords = []) {
         if (!wrapper) return null;
 
         // 1. Precise Selector Match
@@ -409,6 +425,9 @@
 
                 const attrStr = (el.title || '') + (el.getAttribute('aria-label') || '') + (el.innerText || '');
                 const lowerAttr = attrStr.toLowerCase();
+
+                // Check exclusions
+                if (excludeKeywords.some(ex => lowerAttr.includes(ex))) continue;
 
                 for (const key of keywords) {
                     if (lowerAttr.includes(key)) return el;
@@ -680,6 +699,8 @@
                 const nativeSelectors = [
                     '.ytp-fullscreen-button',
                     '.bilibili-player-video-btn-fullscreen', '.squirtle-video-fullscreen', '.bpx-player-ctrl-full',
+                    '.art-control-fullscreen', // ArtPlayer Native Fullscreen
+                    '.wbpv-fullscreen-control', // Weibo Native Fullscreen
                     '[data-a-target="player-fullscreen-button"]',
                     '.player-fullscreen-btn',
                     '.xgplayer-fullscreen', '[data-e2e="xgplayer-fullscreen"]',
@@ -687,9 +708,11 @@
                     '[data-testid="videoPlayer"] [aria-label="全屏"]', '[data-testid="videoPlayer"] [aria-label="Fullscreen"]'
                 ];
                 const nativeKeywords = ['fullscreen', '全屏', 'full-screen'];
+                // Exclude "Web/Page" keywords when searching for Native Fullscreen to avoid false positives (like ArtPlayer's '网页全屏')
+                const excludeKeywords = ['web', '网页', 'page', 'theater', 'wide', '宽屏'];
 
                 const searchRoot = (wrapper === video) ? document : wrapper;
-                const btn = findControlBtn(searchRoot, nativeSelectors, nativeKeywords);
+                const btn = findControlBtn(searchRoot, nativeSelectors, nativeKeywords, excludeKeywords);
 
                 if (btn) {
                     simulateClick(btn);
