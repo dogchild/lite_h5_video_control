@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      4.1.0
+// @version      4.1.2
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, PiP, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
@@ -176,7 +176,8 @@
             '.video-wrapper',            // Generic
             '.art-video-player',         // ArtPlayer
             '.bilibili-player',          // Bilibili (Old)
-            'xg-video-container',        // Douyin / XGPlayer
+            '.xgplayer',                 // XGPlayer (Douyin/Xigua) — must be above xg-video-container
+            'xg-video-container',        // XGPlayer (Fallback)
             '[data-testid="videoPlayer"]'// X (Twitter)
         ],
         // Native Fullscreen Buttons
@@ -190,7 +191,8 @@
                 '.wbpv-fullscreen-control',             // Weibo
                 '[data-a-target="player-fullscreen-button"]', // Twitch
                 '.player-fullscreen-btn',               // Generic
-                '.xgplayer-fullscreen',                 // XGPlayer
+                '.xgplayer-fullscreen .xgplayer-icon',  // XGPlayer (inner icon receives click events)
+                '.xgplayer-fullscreen',                 // XGPlayer (fallback)
                 '[data-e2e="xgplayer-fullscreen"]',     // XGPlayer
                 '.vjs-fullscreen-control',              // VideoJS
                 '[data-testid="videoPlayer"] [aria-label="全屏"]', // X
@@ -209,7 +211,8 @@
                 '.ytp-size-button',                     // YouTube (Theater)
                 '[data-a-target="player-theatre-mode-button"]', // Twitch
                 '.player-fullpage-btn',                 // Generic
-                'xg-icon.xgplayer-page-full-screen',    // XGPlayer
+                '.xgplayer-page-full-screen .xgplayer-icon', // XGPlayer (inner icon receives click events)
+                '.xgplayer-page-full-screen',           // XGPlayer (fallback)
                 '[data-e2e="xgplayer-page-full-screen"]'// XGPlayer
             ],
             keywords: ['web fullscreen', '网页全屏', 'theater']
@@ -221,6 +224,7 @@
                 '.bpx-player-ctrl-next',            // Bilibili (New)
                 '.bilibili-player-video-btn-next',  // Bilibili (Old)
                 '.squirtle-video-next',             // Bilibili (Old)
+                '[data-e2e="xgplayer-next"] .xgplayer-icon', // XGPlayer (inner)
                 '[data-e2e="xgplayer-next"]'        // XGPlayer
             ],
             keywords: ['next', '下一集', '下一个']
@@ -643,6 +647,9 @@
             document.exitPictureInPicture().catch(e => console.error(e));
             showOSD(T.pipOff, video);
         } else if (document.pictureInPictureEnabled) {
+            // Some sites (e.g. Douyin) add disablePictureInPicture attribute — force remove it
+            video.removeAttribute('disablePictureInPicture');
+            video.disablePictureInPicture = false;
             video.requestPictureInPicture().catch(e => console.error(e));
             showOSD(T.pipOn, video);
         }
@@ -748,7 +755,7 @@
                 disableManualWebFullscreen(video);
             } else {
                 // Try finding Native "Web Fullscreen" / "Theatre Mode" buttons first
-                const btn = findControlBtn(document, SITE_CONFIG.webFullscreen.selectors, SITE_CONFIG.webFullscreen.keywords); // Search global because web fs buttons might be outside wrapper
+                const btn = findControlBtn(wrapper, SITE_CONFIG.webFullscreen.selectors, SITE_CONFIG.webFullscreen.keywords);
                 if (btn) {
                     simulateClick(btn);
                     showOSD(T.webFSNative, video);
