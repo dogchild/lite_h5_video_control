@@ -769,7 +769,7 @@
                 if (document.exitFullscreen) document.exitFullscreen();
                 else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
                 showOSD(T.exitFS, video);
-                video.focus(); // Restore focus to video (Fixes Hupu/Generic sites losing focus after exit)
+                video.focus();
             } else {
                 // 1. Try Known Native Buttons
                 const searchRoot = (wrapper === video) ? document : wrapper;
@@ -777,7 +777,7 @@
 
                 if (btn) {
                     simulateClick(btn);
-                    showOSD(T.fullscreen, video); // Show OSD for native button clicks too
+                    showOSD(T.fullscreen, video);
                 } else {
                     // 2. Double Click Fallback (Whitelist)
                     const host = window.location.hostname;
