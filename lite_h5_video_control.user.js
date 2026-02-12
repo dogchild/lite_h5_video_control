@@ -3,10 +3,10 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      4.0.2
-// @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, OSD, Rotate, Mirror, Mute.
-// @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
-// @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
+// @version      4.1.0
+// @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, PiP, OSD, Rotate, Mirror, Mute.
+// @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
+// @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @author       dogchild
 // @license      MIT
 // @icon         data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48cGF0aCBkPSJNMjU2IDhDMTE5IDggOCAxMTkgOCAyNTZzMTExIDI0OCAyNDggMjQ4IDI0OC0xMTEgMjQ4LTI0OFMzOTMgOCAyNTYgOHptMTE1LjcgMjcybC0xNzYgMTAxYy0xNS44IDguOC0zNS43LTIuNS0zNS43LTIxVjE1MmMwLTE4LjQgMTkuOC0yOS44IDM1LjctMjFsMTc2IDEwMWMxNi40IDkuMiAxNi40IDMyLjkgMCA0MnoiLz48L3N2Zz4=
@@ -41,6 +41,8 @@
             exitFS: 'Exit Fullscreen',
             fullscreen: 'Fullscreen',
             fsAPI: 'Fullscreen (API)',
+            pipOn: 'Picture-in-Picture',
+            pipOff: 'Exit Picture-in-Picture',
             tryDblClick: 'Try Double-Click',
             next: 'Playing Next',
             prev: 'Playing Previous',
@@ -61,6 +63,7 @@
                 mute: 'Toggle Mute', mirror: 'Toggle Mirror', rotate: 'Rotate 90°',
                 speedUp: 'Speed Up', speedDown: 'Speed Down', speedReset: 'Reset Speed',
                 fullscreen: 'Native Fullscreen', webFullscreen: 'Web Fullscreen',
+                pip: 'Picture-in-Picture',
                 nextVideo: 'Next Video', prevVideo: 'Previous Video',
                 speed1: 'Speed 1x', speed2: 'Speed 2x', speed3: 'Speed 3x', speed4: 'Speed 4x'
             }
@@ -82,6 +85,8 @@
             exitFS: '退出全屏',
             fullscreen: '全屏',
             fsAPI: '全屏 (API)',
+            pipOn: '画中画',
+            pipOff: '退出画中画',
             tryDblClick: '尝试双击',
             next: '播放下一集',
             prev: '播放上一集',
@@ -102,6 +107,7 @@
                 mute: '静音/取消静音', mirror: '镜像翻转', rotate: '旋转 90°',
                 speedUp: '加速', speedDown: '减速', speedReset: '重置速度',
                 fullscreen: '全屏', webFullscreen: '网页全屏',
+                pip: '画中画',
                 nextVideo: '下一集', prevVideo: '上一集',
                 speed1: '1倍速', speed2: '2倍速', speed3: '3倍速', speed4: '4倍速'
             }
@@ -138,6 +144,7 @@
             speed4: '4',
             fullscreen: 'Enter',
             webFullscreen: 'Shift+Enter',
+            pip: 'Shift+i',
             nextVideo: 'Shift+n',
             prevVideo: 'Shift+p'
         }
@@ -211,14 +218,18 @@
         next: {
             selectors: [
                 '.ytp-next-button',                 // YouTube
-                '.bilibili-player-video-btn-next',  // Bilibili
-                '.squirtle-video-next',             // Bilibili
+                '.bpx-player-ctrl-next',            // Bilibili (New)
+                '.bilibili-player-video-btn-next',  // Bilibili (Old)
+                '.squirtle-video-next',             // Bilibili (Old)
                 '[data-e2e="xgplayer-next"]'        // XGPlayer
             ],
             keywords: ['next', '下一集', '下一个']
         },
         prev: {
-            selectors: ['.ytp-prev-button'],    // YouTube
+            selectors: [
+                '.ytp-prev-button',                 // YouTube
+                '.bpx-player-ctrl-prev',            // Bilibili (New)
+            ],
             keywords: ['previous', 'prev', '上一集', '上一个']
         },
         // Sites where Double-Click Fullscreen should be tried if button not found
@@ -475,10 +486,10 @@
     function findControlBtn(wrapper, selectors, keywords, excludeKeywords = []) {
         if (!wrapper) return null;
 
-        // 1. Precise Selector Match
+        // 1. Precise Selector Match (allow hidden buttons — e.g. YouTube hides next/prev in fullscreen)
         for (const sel of selectors) {
             const btn = wrapper.querySelector(sel);
-            if (btn && btn.offsetParent) return btn; // Must be visible
+            if (btn) return btn;
         }
 
         // 2. Fuzzy Keyword Match (Fallback)
@@ -622,6 +633,19 @@
         if (video._rotateDeg >= 360) video._rotateDeg = 0;
         applyTransform(video);
         showOSD(`${T.rotate} ${video._rotateDeg}°`, video);
+    }
+
+    /**
+     * Toggle Picture-in-Picture mode using the standard browser PiP API.
+     */
+    function togglePiP(video) {
+        if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(e => console.error(e));
+            showOSD(T.pipOff, video);
+        } else if (document.pictureInPictureEnabled) {
+            video.requestPictureInPicture().catch(e => console.error(e));
+            showOSD(T.pipOn, video);
+        }
     }
 
     /**
@@ -970,6 +994,7 @@
                 case 'webFullscreen': toggleFullscreen(video, 'web'); break;
                 case 'rotate': rotateVideo(video); break;
                 case 'mirror': toggleMirror(video); break;
+                case 'pip': togglePiP(video); break;
                 case 'nextVideo': clickControlBtn(video, 'next'); break;
                 case 'prevVideo': clickControlBtn(video, 'prev'); break;
             }

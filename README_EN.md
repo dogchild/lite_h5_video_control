@@ -2,7 +2,7 @@
 
 A lightweight HTML5 video control userscript. Supports almost all HTML5 video websites (YouTube, Bilibili, Twitch, etc.).
 
-Provides functionalities like playback speed control, seek, volume control, fullscreen, web fullscreen, mirroring, rotation, and a beautiful OSD (On-Screen Display).
+Provides functionalities like playback speed control, seek, volume control, fullscreen, picture-in-picture, web fullscreen, mirroring, rotation, and a beautiful OSD (On-Screen Display).
 
 ## ✨ Features
 
@@ -10,8 +10,10 @@ Provides functionalities like playback speed control, seek, volume control, full
 *   **Universal Support**: Works on most HTML5 video sites.
 *   **Custom Shortcuts**: Fully customizable keyboard shortcuts.
 *   **OSD**: Elegant on-screen display feedback.
+*   **Smart Video Detection**: Automatically targets the video closest to screen center on multi-video pages (e.g. Weibo search).
 *   **Advanced Controls**:
     *   **Speed Control**: Precise adjustment, reset support.
+    *   **Picture-in-Picture**: Toggle PiP mode with one key.
     *   **Rotation**: Rotate video 90° (Fixed for native fullscreen).
     *   **Mirroring**: Horizontal flip (Great for dance tutorials).
     *   **Web Fullscreen**: Force any video into browser window fullscreen.
@@ -38,6 +40,7 @@ Provides functionalities like playback speed control, seek, volume control, full
 | **Set Speed** | `1` / `2` / `3` / `4` | Set to 1x / 2x / 3x / 4x |
 | **Fullscreen** | `Enter` | Toggle Native Fullscreen |
 | **Web Fullscreen** | `Shift + Enter` | Toggle Web Fullscreen |
+| **Picture-in-Picture** | `Shift + I` | Toggle PiP Mode |
 | **Next Video** | `Shift + N` | Play Next Video |
 | **Prev Video** | `Shift + P` | Play Previous Video |
 | **Mirror** | `Shift + M` | Toggle Mirror |
