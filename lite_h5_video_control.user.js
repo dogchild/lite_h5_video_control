@@ -3,7 +3,7 @@
 // @name:zh-CN   轻量H5视频控制脚本
 // @name:zh-TW   轻量H5视频控制脚本
 // @namespace    http://tampermonkey.net/
-// @version      4.1.2
+// @version      4.2.1
 // @description  Lite version of video control script. Supports: Seek, Volume, Speed, Fullscreen, PiP, OSD, Rotate, Mirror, Mute.
 // @description:zh-CN 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
 // @description:zh-TW 轻量级HTML5视频控制脚本，支持倍速播放、快进快退、音量控制、全屏、画中画、网页全屏、镜像翻转、旋转等功能，带有美观的OSD提示。
@@ -504,6 +504,9 @@
                 // Skip invisible elements early
                 if (!el.offsetParent) continue;
 
+                // Skip our own OSD element — its text (e.g. "退出全屏") can false-match
+                if (el.id === 'lite-video-osd') continue;
+
                 const attrStr = (el.title || '') + (el.getAttribute('aria-label') || '') + (el.innerText || '');
                 const lowerAttr = attrStr.toLowerCase();
 
@@ -726,15 +729,38 @@
 
     /**
      * Get the appropriate wrapper element for Fullscreen.
-     * Priority: 
+     * Priority:
      * 1. Known Player Containers (YouTube, Bilibili, etc.)
-     * 2. Closest <section> (Robust fallback for generic sites like Hupu)
-     * 3. Direct Parent (Last resort)
+     * 2. Smart Climb: Walk up from video to find nearest ancestor containing
+     *    player control buttons (identified by aria-label/title with fullscreen keywords).
+     *    This handles sites where video and controls are siblings (Zhihu, Douyu, etc.).
+     * 3. Closest <section> (Robust fallback for generic sites like Hupu)
+     * 4. Direct Parent (Last resort)
      */
     function getWrapper(v) {
         for (const selector of SITE_CONFIG.wrappers) {
             const w = v.closest(selector);
             if (w) return w;
+        }
+
+        // Smart Climb: find nearest ancestor that contains player control buttons
+        const controlQuery = [
+            'button[aria-label*="全屏"]',
+            'button[aria-label*="fullscreen" i]',
+            'button[aria-label*="full-screen" i]',
+            'button[aria-label*="theater" i]',
+            'button[aria-label*="theatre" i]',
+            '[title*="全屏"]',
+            '[title*="fullscreen" i]',
+            '[title*="full-screen" i]',
+            '[title*="theater" i]',
+            '[title*="theatre" i]'
+        ].join(',');
+
+        let el = v.parentElement;
+        while (el && el !== document.body) {
+            if (el.querySelector(controlQuery)) return el;
+            el = el.parentElement;
         }
 
         // Fallback: Use parent section to ensure OSD visibility and Transform support
